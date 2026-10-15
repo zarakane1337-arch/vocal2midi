@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 566" width="100%" role="img" aria-labelledby="ttl dsc">
+  <title id="ttl">vocal2midi 管线原理图</title>
+  <desc id="dsc">歌曲输入后经 separation.py 分离层（Demucs htdemucs_ft）得到人声轨，再由 transcription.py 转写层（basic-pitch）转为音符事件，最终输出 MIDI 文件与音符 CSV。</desc>
+  <style>
+    :root {
+      --card: #f6f8fa; --stroke: #d0d7de; --text: #1f2328; --muted: #59636e;
+      --sep: #0969da; --tr: #8250df; --line: #8c959f;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --card: #161b22; --stroke: #30363d; --text: #e6edf3; --muted: #9198a1;
+        --sep: #58a6ff; --tr: #a371f7; --line: #6e7681;
+      }
+    }
+    text { font-family: var(--sans); fill: var(--text); }
+    .pill { fill: var(--card); stroke: var(--stroke); stroke-width: 0.5; }
+    .bar-sep { fill: var(--sep); }
+    .bar-tr { fill: var(--tr); }
+    .mono { font-family: var(--mono); font-size: 13px; font-weight: 500; }
+    .mono-sep { fill: var(--sep); }
+    .mono-tr { fill: var(--tr); }
+    .tag { font-size: 12px; fill: var(--muted); }
+    .body { font-size: 13px; }
+    .sub { font-size: 12px; fill: var(--muted); }
+    .arr { stroke: var(--line); stroke-width: 1.5; fill: none; }
+    .head { stroke: var(--line); }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path class="head" d="M2 1L8 5L2 9" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+
+  <rect class="pill" x="210" y="30" width="260" height="48" rx="10"/>
+  <text class="body" x="340" y="54" text-anchor="middle" dominant-baseline="central">输入歌曲 · mp3 / wav / flac</text>
+
+  <line class="arr" x1="340" y1="78" x2="340" y2="112" marker-end="url(#arrow)"/>
+
+  <rect class="pill" x="40" y="112" width="600" height="104" rx="12"/>
+  <rect class="bar-sep" x="40" y="112" width="6" height="104" rx="3"/>
+  <text class="mono mono-sep" x="66" y="142" dominant-baseline="central">separation.py</text>
+  <text class="tag" x="616" y="142" text-anchor="end" dominant-baseline="central">分离层</text>
+  <text class="body" x="66" y="170" dominant-baseline="central">Demucs htdemucs_ft（Meta AI）</text>
+  <text class="sub" x="66" y="196" dominant-baseline="central">人声 / 伴奏分离 → 纯人声轨 &lt;歌名&gt;_vocals.wav</text>
+
+  <line class="arr" x1="340" y1="216" x2="340" y2="252" marker-end="url(#arrow)"/>
+  <text class="sub" x="352" y="234" dominant-baseline="central">人声 wav</text>
+
+  <rect class="pill" x="40" y="252" width="600" height="104" rx="12"/>
+  <rect class="bar-tr" x="40" y="252" width="6" height="104" rx="3"/>
+  <text class="mono mono-tr" x="66" y="282" dominant-baseline="central">transcription.py</text>
+  <text class="tag" x="616" y="282" text-anchor="end" dominant-baseline="central">转写层</text>
+  <text class="body" x="66" y="310" dominant-baseline="central">basic-pitch（Spotify · ICASSP 2022）</text>
+  <text class="sub" x="66" y="336" dominant-baseline="central">人声 → 音符事件（含 pitch bend）+ 音符明细表</text>
+
+  <line class="arr" x1="340" y1="356" x2="340" y2="392" marker-end="url(#arrow)"/>
+
+  <rect class="pill" x="170" y="392" width="340" height="52" rx="10"/>
+  <text class="body" x="340" y="418" text-anchor="middle" dominant-baseline="central">.mid 文件 + 音符 CSV 明细</text>
+
+  <rect class="pill" x="40" y="474" width="600" height="72" rx="12"/>
+  <text class="body" x="66" y="500" dominant-baseline="central">两层互不耦合，各自可单独运行调试</text>
+  <text class="sub" x="66" y="524" dominant-baseline="central">替换转写引擎只需改 transcription.py　·　入口：src/main.py（命令行）/ src/app.py（网页界面）</text>
+</svg>

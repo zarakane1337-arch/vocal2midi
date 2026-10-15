@@ -47,13 +47,9 @@ except ModuleNotFoundError as _exc:
     )
     raise SystemExit(1) from None
 
-from main import (
-    DEMUCS_MODEL,
-    resolve_device,
-    separate_vocals,
-    transcribe_to_midi,
-    write_notes_csv,
-)
+# UI 只依赖两个"层"的接口，不依赖 CLI 模块（main.py），各自可独立演进
+from separation import DEMUCS_MODEL, resolve_device, separate_vocals
+from transcription import transcribe_to_midi, write_notes_csv
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("vocal2midi.ui")
