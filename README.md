@@ -247,40 +247,6 @@ pip install --no-deps basic-pitch
 
 （scipy / scikit-learn / resampy 等其余依赖通常已随 librosa 等包就位。）
 
-## 分发给他人
-
-### 打包发布包
-
-```bash
-python tools/build_release.py     # 生成 dist/vocal2midi-v0.1.0.zip
-```
-
-发布包内只有 7 个文件（约 50 KB），**不包含**虚拟环境、模型权重和输出目录——
-接收方首次运行时自动安装依赖并下载模型。
-
-### 接收方使用步骤
-
-1. 解压 zip
-2. 安装 [Python 3.10~3.12](https://www.python.org/downloads/)（Windows 安装时须勾选 *Add Python to PATH*）
-3. 安装 ffmpeg：`winget install Gyan.FFmpeg`（macOS：`brew install ffmpeg`；Ubuntu：`sudo apt install ffmpeg`）
-4. 双击 `start.bat`（macOS/Linux 执行 `bash start.sh`）
-
-脚本会自动创建虚拟环境、安装依赖、启动网页界面。首次安装需下载约 2~3 GB 依赖，
-首次转换需额外下载数百 MB 模型权重，请预留磁盘空间与网络时间。
-
-### 其他分发方式
-
-| 方式 | 说明 |
-|---|---|
-| **源码 zip**（推荐） | 上面的做法。体积小、跨平台；代价是接收方要装 Python 和 ffmpeg |
-| **PyInstaller 单文件 exe** | 理论上可做到双击即用，但需打包 torch + TensorFlow，产物体积约 2~4 GB，构建耗时且易踩坑，不推荐 |
-| **在线 Demo（Hugging Face Spaces / Colab）** | 零安装，对方只需浏览器；适合分给非技术用户，但需联网且算力受限 |
-
-### 需要发送的文件夹
-
-只需 `src/main.py`、`src/app.py`、`requirements.txt`、`README.md`、`LICENSE`、`start.bat`、`start.sh`。
-**不要**发送 `.venv/`（含本机绝对路径，拷过去无法使用）、`out/`（输出产物）、
-`.workbuddy/`（本地项目记忆）、`__pycache__/`。
 
 ## 效果预期
 
