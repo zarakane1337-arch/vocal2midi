@@ -12,7 +12,7 @@
       ▼
 ┌──────────────────┐
 │  Demucs 分离引擎  │   模型：htdemucs_ft（Meta AI）
-│  人声 / 伴奏分离   │   输出：纯人声轨 vocals.wav
+│  人声 / 伴奏分离  │   输出：纯人声轨 vocals.wav
 └──────────────────┘
       │
       ▼
@@ -101,58 +101,6 @@ python src/app.py
 界面内可切换 Demucs 模型、计算设备（auto/cpu/cuda），高级转写参数折叠在页面下方。
 若输入已是分离好的人声（干声），勾选「上传的已是人声轨」可跳过分离步骤。
 
-#### 关闭页面后自动释放端口
-
-浏览器不会通知服务端“标签页已关闭”，因此程序用两层机制自行判断：
-
-1. 页面每 5 秒向 `/vocal2midi/heartbeat` 上报一次心跳；
-2. 关闭或刷新页面时用 `sendBeacon` 发送一次告别信号。
-
-服务端看门狗线程在「曾经有页面连过、但已连续 N 秒没有心跳、且当前没有转换任务在跑」
-时自动退出进程、释放端口。默认 N = 60 秒，可用 `--idle-timeout` 调整：
-
-```bash
-python src/app.py                        # 默认：页面离开 60 秒后自动退出
-python src/app.py --idle-timeout 20      # 20 秒，退出更快
-python src/app.py --idle-timeout 0       # 禁用该功能，一直驻留
-python src/app.py --port 8000 --no-browser
-```
-
-行为说明：
-
-| 场景 | 结果 |
-|---|---|
-| 关闭标签页 | 约 N 秒后自动退出，端口释放 |
-| 刷新页面 / 短暂切换 | **不会**退出（保留 5 秒宽限 + 新页面立刻续上心跳） |
-| 正在进行转换 | **绝不会**退出（任务期间看门狗暂停判定），可放心切到别的窗口 |
-| 启动后从未打开过页面 | 不会退出（从未收到心跳则不启动判定） |
-| 想立刻退出 | 点界面上的「退出程序」按钮，或直接关闭启动它的终端窗口 |
-
-#### 不使用 start.bat，直接启动
-
-```bat
-:: 用已经装好依赖的那个解释器（换成你自己的路径）
-"路径\到\python.exe" src\app.py
-
-:: 常用参数
-"路径\到\python.exe" src\app.py --port 8000        :: 换端口
-"路径\到\python.exe" src\app.py --idle-timeout 0   :: 关闭自动退出，一直驻留
-"路径\到\python.exe" src\app.py --no-browser       :: 不自动打开浏览器
-
-:: 命令行版
-"路径\到\python.exe" src\main.py "浮夸.mp3"
-```
-
-> **注意**：`python` 这个命令在不同终端里可能指向不同解释器（官方 Python、微软商店版、
-> MSYS2/Cygwin 的 Python…）。依赖只装在其中一个里，用另一个启动就会报
-> `ModuleNotFoundError`。先确认你用的是哪个：
->
-> ```bat
-> python -c "import sys; print(sys.executable)"
-> ```
->
-> 用哪个解释器启动，就要用同一个装依赖：`"<上面输出的路径>" -m pip install -r requirements.txt`
-
 ### 命令行
 
 ```bash
@@ -178,15 +126,7 @@ python src/main.py "浮夸.mp3" --onset 0.7 --min-note-len 150
 
 ## 参数参考
 
-### 界面参数（`src/app.py`）
-
-| 参数 | 默认值 | 说明 |
-|---|---|---|
-| `--port` | `7860` | 监听端口 |
-| `--idle-timeout` | `60` | 页面关闭后多少秒自动退出并释放端口，`0` 为禁用 |
-| `--no-browser` | 关 | 启动时不自动打开浏览器 |
-
-### 命令行参数（`src/main.py`）
+### 命令行参数
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
@@ -219,22 +159,8 @@ python src/main.py "浮夸.mp3" --onset 0.7 --min-note-len 150
 | 分离阶段卡在下载模型 | 首次运行需联网拉取权重；若走代理，确认代理放行了模型下载域名 |
 | 分离非常慢 | 运行在 CPU 上；有 N 卡时安装 CUDA 版 torch 并选 `--device cuda` |
 | 提示未安装 basic-pitch | `pip install basic-pitch`（详见下方 Python 3.13 注意事项） |
-| `ModuleNotFoundError: No module named 'gradio'`（依赖明明装过） | 启动用的解释器和装依赖的解释器不是同一个。先看 `python -c "import sys; print(sys.executable)"` 输出的路径，再用该路径 `-m pip install -r requirements.txt`；或直接用装好依赖的那个解释器启动 |
 | 未检出任何音符 | 调低 `--onset` / `--frame`；确认 `--f0-min` / `--f0-max` 覆盖了实际音域 |
-| 关闭页面后端口仍被占用 | 见「关闭页面后自动释放端口」；必要时调小 `--idle-timeout`。若进程已残留，用 `netstat -ano \| findstr 7860` 找到 PID 后 `taskkill /PID <PID> /F` |
-| 换端口启动报错 | 7860 被其他程序占用，用 `--port 8000` 换一个 |
 | 转出结果有不少错音 | 属预期，见下节“效果预期” |
-
-## Python 版本与解释器
-
-| 解释器 | 能否直接用 | 说明 |
-|---|---|---|
-| 官方 Python 3.10 ~ 3.12 | ✅ 推荐 | `py install 3.12` 或从 python.org 安装 |
-| 官方 Python 3.13 | ⚠️ 可运行 | basic-pitch 需走 ONNX 后端（见下） |
-| 官方 Python 3.14 | ⚠️ 未验证 | PyTorch 等未必有对应预编译包 |
-| 微软商店版 Python | ❌ | 沙箱化路径，安装二进制依赖常失败 |
-| MSYS2 / Cygwin 的 Python | ❌ | 与系统 DLL 冲突，torch 安装易失败 |
-| 项目内 `.venv` | ✅ 最佳 | 依赖隔离，VS Code 与 start.bat 都会自动识别 |
 
 ### Python 3.13 已知问题
 
@@ -247,40 +173,6 @@ pip install --no-deps basic-pitch
 
 （scipy / scikit-learn / resampy 等其余依赖通常已随 librosa 等包就位。）
 
-## 分发给他人
-
-### 打包发布包
-
-```bash
-python tools/build_release.py     # 生成 dist/vocal2midi-v0.1.0.zip
-```
-
-发布包内只有 7 个文件（约 50 KB），**不包含**虚拟环境、模型权重和输出目录——
-接收方首次运行时自动安装依赖并下载模型。
-
-### 接收方使用步骤
-
-1. 解压 zip
-2. 安装 [Python 3.10~3.12](https://www.python.org/downloads/)（Windows 安装时须勾选 *Add Python to PATH*）
-3. 安装 ffmpeg：`winget install Gyan.FFmpeg`（macOS：`brew install ffmpeg`；Ubuntu：`sudo apt install ffmpeg`）
-4. 双击 `start.bat`（macOS/Linux 执行 `bash start.sh`）
-
-脚本会自动创建虚拟环境、安装依赖、启动网页界面。首次安装需下载约 2~3 GB 依赖，
-首次转换需额外下载数百 MB 模型权重，请预留磁盘空间与网络时间。
-
-### 其他分发方式
-
-| 方式 | 说明 |
-|---|---|
-| **源码 zip**（推荐） | 上面的做法。体积小、跨平台；代价是接收方要装 Python 和 ffmpeg |
-| **PyInstaller 单文件 exe** | 理论上可做到双击即用，但需打包 torch + TensorFlow，产物体积约 2~4 GB，构建耗时且易踩坑，不推荐 |
-| **在线 Demo（Hugging Face Spaces / Colab）** | 零安装，对方只需浏览器；适合分给非技术用户，但需联网且算力受限 |
-
-### 需要发送的文件夹
-
-只需 `src/main.py`、`src/app.py`、`requirements.txt`、`README.md`、`LICENSE`、`start.bat`、`start.sh`。
-**不要**发送 `.venv/`（含本机绝对路径，拷过去无法使用）、`out/`（输出产物）、
-`.workbuddy/`（本地项目记忆）、`__pycache__/`。
 
 ## 效果预期
 
