@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+out/
+dist/
+.vscode/
+.workbuddy/memory/2026-10-14.md
+.workbuddy/memory/2026-10-15.md
+.workbuddy/memory/MEMORY.md
+tools/build_release.py
