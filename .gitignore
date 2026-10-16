@@ -4,8 +4,7 @@ __pycache__/
 out/
 dist/
 .vscode/
-.workbuddy/memory/2026-10-14.md
-.workbuddy/memory/2026-10-15.md
-.workbuddy/memory/MEMORY.md
-tools/build_release.py
-docs/swiftf0_main_reference.py
+tools/
+gradio/
+.workbuddy/
+
