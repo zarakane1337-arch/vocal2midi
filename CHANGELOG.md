@@ -220,7 +220,7 @@ pip install -r requirements.txt
 - `start.bat` / `start.sh` 一键启动：自动选解释器、建虚拟环境、装依赖、开界面。
 - 分层约定：两个入口只调用两层的公开接口，换转写引擎时只改 `transcription.py` 内部。
 
-[未发布]: https://github.com/zarakane1337-arch/vocal2midi-A-tool-which-can-transform-vocal-into-midi-file/compare/V2.0.0...HEAD
-[2.0.0]: https://github.com/zarakane1337-arch/vocal2midi-A-tool-which-can-transform-vocal-into-midi-file/releases/tag/V2.0.0
-[1.0.0]: https://github.com/zarakane1337-arch/vocal2midi-A-tool-which-can-transform-vocal-into-midi-file/releases/tag/V1.0.0
-[0.1.0]: https://github.com/zarakane1337-arch/vocal2midi-A-tool-which-can-transform-vocal-into-midi-file/releases/tag/V0.2.0
+[未发布]: https://github.com/zarakane1337-arch/vocal2midi/compare/V2.0.0...HEAD
+[2.0.0]: https://github.com/zarakane1337-arch/vocal2midi/releases/tag/V2.0.0
+[1.0.0]: https://github.com/zarakane1337-arch/vocal2midi/releases/tag/V1.0.0
+[0.1.0]: https://github.com/zarakane1337-arch/vocal2midi/releases/tag/V0.2.0
