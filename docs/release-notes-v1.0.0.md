@@ -1,0 +1,92 @@
+﻿# GitHub Release 文案草稿（v1.0.0）
+
+> 用法：打开 https://github.com/zarakane1337-arch/vocal2midi-A-tool-which-can-transform-vocal-into-midi-file/releases/new
+> → Tag 填 `v1.0.0`（选 Create new tag on publish）→ Release title 填 `v1.0.0 — 把转写引擎换成 SwiftF0`
+> → 正文直接粘贴下面 `---` 之间的内容。
+
+---
+
+## 转写引擎换成 SwiftF0：音准误差降到 1/3，速度快近 2 倍
+
+这个版本把转写层从 **basic-pitch** 换成了 **[SwiftF0](https://github.com/lars76/swift-f0)**。
+前提没变：先由 Demucs 把伴奏剥掉，只把单人声轨喂给转写器。
+
+### 实测对比
+
+测试素材：一首 210 秒的日文歌曲，Demucs `htdemucs_ft` 分离出的人声轨；
+参照基准是独立的 librosa pYIN（不当绝对真值，只作第三方锚点）。
+
+| 指标 | SwiftF0 | basic-pitch | 变化 |
+|---|---|---|---|
+| 音高中位误差 | **9.2¢** | 25.8¢ | 降到 1/3 |
+| 音准在 ±50¢ 内 | **91.2%** | 80.2% | +11 pt |
+| 八度错误率 | **0.75%** | 4.98% | 降到 1/6.6 |
+| 音符 F1 | **0.833** | 0.602 | +0.23 |
+| 推理耗时（热，CPU） | **1.32 s** | 2.33 s | 快 1.8× |
+| 模型体积 | **135 KB** | 225 KB | — |
+
+> 音准一栏是两端都「落盘成 MIDI 再回放」后的结果，口径一致。
+> 直接比原始帧级 F0 时 SwiftF0 是 7.1¢、basic-pitch 是 25.8¢ —— 后者几乎不受弯音影响，
+> 说明差距来自模型本身，不是 MIDI 量化造成的。
+
+### 为什么 basic-pitch 在这条管线里吃亏
+
+basic-pitch 是**多声部转写器**，输出严格量化到整数 MIDI（100 音分一格）；
+而 SwiftF0 是**单声部 F0 跟踪器**，输出连续音高，正好匹配「Demucs 已经把伴奏剥干净」这个前提。具体表现：
+
+- **颤音和滑音丢了**：basic-pitch 的主音高只能落在半音格上，±50¢ 以内的细节全靠 contour 的弯音勉强补，
+  补不回来的部分直接变成误差。
+- **会凭空造出第二个声部**：所有发声帧里有 7.9% 同时响着 2 个以上音符。但这些「第二声部」的谐波显著性
+  中位只有 0.375，54% 低于 0.5 —— 大多是泛音和混响误检，不是真的和声。
+- **音域越界**：人声实际在 MIDI 51–73，它却输出了 37–80 的音符。
+
+SwiftF0 这边则把连续 F0 直接写进 MIDI 的 pitchwheel，回放音准几乎等于原始连续 F0
+（中位 7.9¢ → 8.5¢，±50¢ 内 91.0% → 90.6%）。
+
+### 破坏性变更
+
+- **`--onset` 的含义变了。** 以前是 basic-pitch 的 onset 阈值；现在线性映射到 SwiftF0 的
+  `pitch_hold_ms`（`30 × onset / 0.5`，默认 0.5 → 30 ms）。**现在调高 `--onset` 会让音符更长更少**，
+  而不是「更严格地要求起音」。如果你之前写死了 `--onset 0.8`，跑出来的音符会比以前长。
+- **`--min-note-len` 默认值 100 → 50。** SwiftF0 的音符分段自带噪声地板，50 ms 是对齐实测最优的那一档。
+- **`--frame` 现在的实际作用很小。** `segment_notes` 内部已经处理过低置信度帧，
+  外部再卡阈值收益接近 0；保留该参数只是为了兼容旧调用。
+
+`transcribe_to_midi()` 的签名和事件格式 `(start_s, end_s, pitch_midi, amplitude, [bend…])` **完全没变**，
+`main.py` / `app.py` 的调用处一行未改 —— 这正是 README 里那条分层约定的用处。
+
+### 升级
+
+```bash
+pip install -r requirements.txt
+```
+
+`basic-pitch` 不再是依赖。它会拖进 TensorFlow 以及 librosa、scipy、scikit-learn、resampy、
+pretty_midi、mir_eval 一整条链；SwiftF0 只需要 `onnxruntime` + `numpy`（重采样用 `soxr`，写 MIDI 用 `mido`）。
+顺带的好处：**Python 3.13 上不再需要绕 TensorFlow 的特殊安装步骤**，直接装就行。
+
+### 修复
+
+- 曲名含中文/日文时写 MIDI 会抛
+  `UnicodeEncodeError: 'latin-1' codec can't encode characters`。
+  MIDI 的 meta 文本按规范是 latin-1，现在会降级成 ASCII 的 track name。
+
+### 新增文件
+
+- `docs/swiftf0-vs-basic-pitch.md` —— 完整实测报告，含逐帧音准、音符级 F1、音符边界、
+  速度、basic-pitch 结构性问题分析和全部复现命令
+- `docs/swiftf0_vs_basicpitch_pitch.png` —— 逐帧音高对比图（连续轨迹 vs 半音台阶）
+- `docs/swiftf0_vs_basicpitch_metrics.png` —— 音准误差累积分布 + 关键指标面板
+- `CHANGELOG.md`
+
+### 已知限制
+
+- 人声转谱本身没有唯一正确答案。Spotify vocadito 数据集的实验显示，两位专业乐手独立标注同一段人声，
+  互相一致性 F-measure 只有 0.64，所以这类工具的天花板大约在 70~80%。上面的 F1 也是对着机器生成的
+  pYIN 参照算的，不是黄金标注。
+- 不做时间量化（保留演唱的真实节奏），对拍请在 DAW 里完成。
+- pitchwheel 是 MIDI 标准的 ±2 半音量程，6580 个弯音里有 5 个（0.08%）顶到边界，涉及 4 个音符。
+
+**Full Changelog**: https://github.com/zarakane1337-arch/vocal2midi-A-tool-which-can-transform-vocal-into-midi-file/compare/v0.1.0...v1.0.0
+
+---

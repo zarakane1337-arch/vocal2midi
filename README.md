@@ -39,10 +39,15 @@ vocal2midi/
 │   ├── separation.py     # 分离层：Demucs 混音 → 人声 wav
 │   └── transcription.py  # 转写层：人声 wav → 音符 → MIDI / CSV（SwiftF0）
 ├── docs/
-│   └── pipeline.svg      # README 上方的管线原理图（可编辑，深色模式自动换色）
+│   ├── pipeline.svg      # README 上方的管线原理图（可编辑，深色模式自动换色）
+│   ├── swiftf0-vs-basic-pitch.md        # SwiftF0 与 basic-pitch 的完整实测对比报告
+│   ├── swiftf0_vs_basicpitch_pitch.png  # 逐帧音高对比（连续轨迹 vs 半音台阶）
+│   ├── swiftf0_vs_basicpitch_metrics.png # 音准误差 CDF + 关键指标面板
+│   └── release-notes-v1.0.0.md          # v1.0.0 的 GitHub Release 文案
 ├── start.bat             # Windows 一键启动（自动建虚拟环境、装依赖、开界面）
 ├── start.sh              # macOS / Linux 一键启动
 ├── requirements.txt      # Python 依赖
+├── CHANGELOG.md          # 更新日志
 ├── LICENSE
 ├── README.md
 └── out/                  # 运行时生成：人声轨、MIDI、CSV
@@ -206,6 +211,10 @@ python src/main.py "浮夸.mp3" --onset 0.8 --min-note-len 100
 - 实测（210 秒日文歌曲人声轨）：回放 MIDI 对 pYIN 参照的中位误差 9.2¢、91% 的音符在 ±50¢ 内、八度错误 0.75%。
 - 人声转谱本身不存在唯一正确答案。Spotify 的 vocadito 数据集实验显示，两位专业乐手独立标注同一段人声，互相一致性 F-measure 仅 0.64。因此本类工具的准确率上限约 70~80%。
 - 本项目不做时间量化（保留演唱的真实节奏），对拍、量化请在 DAW 中完成。
+
+## 更新日志
+
+见 [`CHANGELOG.md`](CHANGELOG.md)。当前版本 **v1.0.0**（转写引擎换成 SwiftF0）。
 
 ## 许可证
 

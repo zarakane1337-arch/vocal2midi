@@ -21,7 +21,7 @@ except ImportError:  # python src/main.py
 
 log = logging.getLogger("vocal2midi")
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
 
 # 兼容旧的导入路径（曾经的 `from main import separate_vocals` 仍然可用）
 __all__ = [
