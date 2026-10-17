@@ -1,12 +1,6 @@
 #!/usr/bin/env python
 """vocal2midi 命令行入口 —— 编排：分离 → 转写 → 落盘。
 
-分层结构（各层职责写在各自模块的 docstring 里，改动互不越界）：
-    src/separation.py      分离层：Demucs 混音 → 人声 wav
-    src/transcription.py   转写层：人声 wav → 音符 → .mid / .csv
-    src/main.py            本文件：CLI 参数 + 流程编排 + 版本号
-    src/app.py             Gradio UI（只调用下面两个层的接口）
-
 启动：
     python src/main.py "song.mp3"
     python src/main.py --vocals out/stems/song_vocals.wav

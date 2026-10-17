@@ -5,13 +5,6 @@
     python app.py
 然后浏览器打开 http://127.0.0.1:7860（默认自动弹出）。
 
-页面关闭后自动释放端口：
-    浏览器和服务端之间没有“标签页已关闭”的原生通知，因此采用两层机制——
-    1) 页面每 5 秒向 /vocal2midi/heartbeat 打一次心跳；
-    2) 关闭/刷新页面时用 sendBeacon 向 /vocal2midi/bye 发一次告别。
-    服务端看门狗线程发现“曾有过页面、但已连续 N 秒没心跳、且当前没有转换任务在跑”，
-    就自动退出进程、释放端口。N 由 --idle-timeout 控制（0 = 关闭该功能）。
-
 依赖：pip install -r requirements.txt
 """
 

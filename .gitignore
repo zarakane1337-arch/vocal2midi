@@ -7,4 +7,8 @@ dist/
 tools/
 gradio/
 .workbuddy/
+.tmp/
 
+docs/swiftf0_vs_basicpitch_metrics.png
+docs/swiftf0_vs_basicpitch_pitch.png
+docs/swiftf0-vs-basic-pitch.md

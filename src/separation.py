@@ -1,12 +1,5 @@
 """人声分离层 —— Demucs（htdemucs_ft）。
 
-职责边界（单人一层，改动互不越界）：
-    输入：任意歌曲文件（mp3/wav/flac…）
-    输出：人声 wav（并写盘缓存）
-    对外接口：`separate_vocals()` / `resolve_device()` / `DEMUCS_MODEL`
-    调用方：`main.py`（CLI）、`app.py`（UI）
-    下游：`transcription.py`
-
 单独调试（不经过 UI/CLI）：
     python src/separation.py "song.mp3" -o out/stems
 """
