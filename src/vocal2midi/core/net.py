@@ -215,9 +215,10 @@ def download(
                     if not block:
                         break
                     out.write(block)
-    if tmp.stat().st_size != total:
+    assembled = tmp.stat().st_size
+    if assembled != total:
         tmp.unlink(missing_ok=True)
-        raise DownloadError(f"文件大小不符：期望 {total}，实际 {tmp.stat().st_size if tmp.exists() else 0}")
+        raise DownloadError(f"文件大小不符：期望 {total}，实际 {assembled}")
     if expected_sha256:
         actual = _sha256(tmp)
         if actual != expected_sha256.lower():
