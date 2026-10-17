@@ -202,7 +202,7 @@ bend_range 4
 
 ## 更新日志
 
-见 [`CHANGELOG.md`](CHANGELOG.md)。当前版本 **v2.0.0**（架构重构 + 11MB 安装包 + 深浅主题 + 自定义参数）。
+见 [`CHANGELOG.md`](CHANGELOG.md)。当前版本 **v2.0.0**：架构重构为 `src/vocal2midi/` 包、安装包 420 MB → 10.8 MB、深浅/跟随系统主题、转写参数滑动条 + 输入框双向调节、自定义参数。
 
 ## 许可证
 
