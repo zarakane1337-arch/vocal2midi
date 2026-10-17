@@ -38,7 +38,7 @@ __all__ = [
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="vocal2midi",
-        description="歌曲 → 人声 MIDI：Demucs 分离人声 + basic-pitch 转写",
+        description="歌曲 → 人声 MIDI：Demucs 分离人声 + SwiftF0 转写",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("input", nargs="?", help="输入歌曲文件（mp3/wav/flac…）")
@@ -48,10 +48,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--device", default="auto", help="auto / cpu / cuda")
     p.add_argument("--overwrite", action="store_true", help="强制重新分离人声")
 
-    g = p.add_argument_group("basic-pitch 转写参数")
-    g.add_argument("--onset", type=float, default=0.5, help="起始点阈值；调高（0.6~0.8）可减少碎音和鬼音")
-    g.add_argument("--frame", type=float, default=0.3, help="持续帧阈值；调高音符更短更少")
-    g.add_argument("--min-note-len", type=float, default=100.0, help="最短音符时长（毫秒）")
+    g = p.add_argument_group("SwiftF0 转写参数")
+    g.add_argument("--onset", type=float, default=0.5, help="音符切分灵敏度；调高（0.6~0.8）音符更长更少")
+    g.add_argument("--frame", type=float, default=0.3, help="发声置信度阈值；调高更严格，鬼音更少")
+    g.add_argument("--min-note-len", type=float, default=50.0, help="最短音符时长（毫秒）")
     g.add_argument("--f0-min", type=float, default=F0_MIN, help="限定最低基频 Hz，0 表示不限制")
     g.add_argument("--f0-max", type=float, default=F0_MAX, help="限定最高基频 Hz，0 表示不限制")
 
@@ -110,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
             f0_max=args.f0_max or None,
         )
     except ImportError:
-        log.error("未安装 basic-pitch：pip install basic-pitch")
+        log.error('未安装 swift-f0：pip install "swift-f0[audio,midi]"')
         return 1
 
     if not events:

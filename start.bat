@@ -13,7 +13,7 @@ echo.
 
 REM ---------- 0) 项目内已有可用的 .venv 就直接用，不依赖系统 Python ----------
 if exist ".venv\Scripts\python.exe" (
-    ".venv\Scripts\python.exe" -c "import demucs, basic_pitch, gradio" >nul 2>nul
+    ".venv\Scripts\python.exe" -c "import demucs, swift_f0, gradio" >nul 2>nul
     if not errorlevel 1 (
         echo [OK] 使用项目内的 .venv，无需系统 Python。
         set "VPY=.venv\Scripts\python.exe"
@@ -62,7 +62,7 @@ for /f %%i in ('%PYCMD% -c "import sys;print(sys.version_info[1])"') do set "PYM
 if not defined PYMINOR set "PYMINOR=0"
 if %PYMINOR% GEQ 13 (
     echo.
-    echo [提示] 检测到较新的 Python，basic-pitch 将改用 ONNX 后端安装。
+    echo [提示] 检测到较新的 Python，依赖将全部从预编译轮子安装。
     echo        注意：PyTorch 对新版本 Python 的预编译包可能尚未发布，
     echo        若 demucs 安装失败，请改装官方 Python 3.12： py install 3.12
 )
@@ -104,20 +104,16 @@ set "VPY=.venv\Scripts\python.exe"
 if errorlevel 1 goto :venv_failed
 
 REM 依赖已就绪则跳过安装（重复启动不用再等）
-"%VPY%" -c "import demucs, basic_pitch, gradio" >nul 2>nul
+"%VPY%" -c "import demucs, swift_f0, gradio" >nul 2>nul
 if not errorlevel 1 (
     echo.
     echo [2/3] 依赖已就绪，跳过安装。
     goto :check_ffmpeg
 )
 
-for /f %%i in ('"%VPY%" -c "import sys;print(sys.version_info[0]*100+sys.version_info[1])"') do set "PYNUM=%%i"
-
 REM ---------- 3) 安装依赖 ----------
 echo.
 echo [2/3] 安装依赖（首次约 2~3 GB，耗时较长，请勿关闭窗口）...
-
-if %PYNUM% GEQ 313 goto :install_onnx
 
 "%VPY%" -m pip install --upgrade pip --quiet
 "%VPY%" -m pip install -r requirements.txt -i %MIRROR%
@@ -125,21 +121,9 @@ if errorlevel 1 (
     echo [提示] 镜像源安装失败，改用官方源重试...
     "%VPY%" -m pip install -r requirements.txt
 )
-goto :check_result
-
-:install_onnx
-echo        Python %PYNUM% 无法安装 basic-pitch 依赖的 TensorFlow，自动改用 ONNX 后端
-"%VPY%" -m pip install --upgrade pip --quiet
-"%VPY%" -m pip install demucs gradio onnxruntime mir-eval -i %MIRROR%
-if errorlevel 1 (
-    echo [提示] 镜像源安装失败，改用官方源重试...
-    "%VPY%" -m pip install demucs gradio onnxruntime mir-eval
-)
-"%VPY%" -m pip install --no-deps basic-pitch -i %MIRROR%
-if errorlevel 1 "%VPY%" -m pip install --no-deps basic-pitch
 
 :check_result
-"%VPY%" -c "import demucs, basic_pitch, gradio" 2>nul
+"%VPY%" -c "import demucs, swift_f0, gradio" 2>nul
 if errorlevel 1 goto :deps_failed
 
 :check_ffmpeg

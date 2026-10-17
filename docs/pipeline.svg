@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 566" width="100%" role="img" aria-labelledby="ttl dsc">
   <title id="ttl">vocal2midi 管线原理图</title>
-  <desc id="dsc">歌曲输入后经 separation.py 分离层（Demucs htdemucs_ft）得到人声轨，再由 transcription.py 转写层（basic-pitch）转为音符事件，最终输出 MIDI 文件与音符 CSV。</desc>
+  <desc id="dsc">歌曲输入后经 separation.py 分离层（Demucs htdemucs_ft）得到人声轨，再由 transcription.py 转写层（SwiftF0）转为音符事件，最终输出 MIDI 文件与音符 CSV。</desc>
   <style>
     :root {
       --card: #f6f8fa; --stroke: #d0d7de; --text: #1f2328; --muted: #59636e;
@@ -52,7 +52,7 @@
   <rect class="bar-tr" x="40" y="252" width="6" height="104" rx="3"/>
   <text class="mono mono-tr" x="66" y="282" dominant-baseline="central">transcription.py</text>
   <text class="tag" x="616" y="282" text-anchor="end" dominant-baseline="central">转写层</text>
-  <text class="body" x="66" y="310" dominant-baseline="central">basic-pitch（Spotify · ICASSP 2022）</text>
+  <text class="body" x="66" y="310" dominant-baseline="central">SwiftF0（14K 参数 · 16ms 帧 · MIT）</text>
   <text class="sub" x="66" y="336" dominant-baseline="central">人声 → 音符事件（含 pitch bend）+ 音符明细表</text>
 
   <line class="arr" x1="340" y1="356" x2="340" y2="392" marker-end="url(#arrow)"/>

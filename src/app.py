@@ -174,7 +174,7 @@ def run(
             except (ImportError, KeyError, RuntimeError, ValueError) as exc:
                 raise gr.Error(f"人声分离失败：{exc}") from exc
 
-        yield progress_bar(60, "basic-pitch 转写中…"), elapsed(), None, None, None
+        yield progress_bar(60, "SwiftF0 转写中…"), elapsed(), None, None, None
         try:
             midi_path, events = transcribe_to_midi(
                 vocals,
@@ -186,7 +186,7 @@ def run(
                 f0_max=f0_max or None,
             )
         except ImportError as exc:
-            raise gr.Error(f"未安装 basic-pitch：{exc}") from exc
+            raise gr.Error(f'未安装 swift-f0：{exc}（pip install "swift-f0[audio,midi]"）') from exc
 
         yield progress_bar(90, "导出音符表…"), elapsed(), None, None, None
         csv_path = write_notes_csv(events, OUT_DIR / f"{stem}_vocals_notes.csv")
@@ -194,7 +194,7 @@ def run(
         status = (
             f"完成，共 {len(events)} 个音符，总用时 {time.time() - started:.0f} 秒（设备 {real_device}）\n"
             f"人声轨已缓存于 {vocals}，下次同一文件会自动复用。\n"
-            "如碎音/鬼音偏多，把「起始阈值」调到 0.6~0.8、最短音符调到 150ms 再试。"
+            "如碎音/鬼音偏多，把「音符切分阈值」调到 0.75~0.9、最短音符调到 100ms 再试。"
         )
         yield progress_bar(100, "完成 ✓"), status, str(vocals), str(midi_path), str(csv_path)
     finally:
@@ -212,7 +212,7 @@ def build_ui() -> gr.Blocks:
     with gr.Blocks(title="vocal2midi · 人声转 MIDI") as demo:
         gr.Markdown(
             "# vocal2midi\n"
-            "上传一首歌 → Demucs 分离人声 → basic-pitch 转写 → 下载人声 MIDI。\n"
+            "上传一首歌 → Demucs 分离人声 → SwiftF0 转写 → 下载人声 MIDI。\n"
             "CPU 上一首 4 分钟的歌约需数分钟；分离结果会缓存，同一文件重复转换无需重跑。\n"
             "关闭浏览器页面后，程序会在空闲一段时间后自动退出并释放端口。"
         )
@@ -244,10 +244,10 @@ def build_ui() -> gr.Blocks:
 
         with gr.Accordion("高级参数（转写效果不理想时再调）", open=False):
             with gr.Row():
-                onset = gr.Slider(0.3, 0.9, value=0.5, step=0.05, label="起始阈值（调高减少碎音/鬼音）")
-                frame = gr.Slider(0.1, 0.6, value=0.3, step=0.05, label="持续阈值（调高音符更短更少）")
+                onset = gr.Slider(0.3, 0.9, value=0.5, step=0.05, label="音符切分阈值（调高音符更长更少）")
+                frame = gr.Slider(0.1, 0.6, value=0.3, step=0.05, label="发声置信度阈值（调高鬼音更少）")
             with gr.Row():
-                min_note_len = gr.Slider(50, 300, value=100, step=10, label="最短音符时长（毫秒）")
+                min_note_len = gr.Slider(20, 300, value=50, step=10, label="最短音符时长（毫秒）")
                 f0_min = gr.Slider(0, 200, value=70, step=10, label="最低基频 Hz（0 = 不限制）")
                 f0_max = gr.Slider(200, 2000, value=900, step=50, label="最高基频 Hz")
 

@@ -1,12 +1,14 @@
-# Demucs 人声分离 + basic-pitch 转写
+# Demucs 人声分离 + SwiftF0 转写
 demucs>=4.0.1
-basic-pitch>=0.4.0
+swift-f0[audio,midi]>=0.3.0
 
 # 网页 UI（python app.py 启动）
 gradio>=5.0
 
 # 说明：
-# 1) torch 由 demucs / basic-pitch 自动带入。需要 GPU 加速时，先按 pytorch.org
-#    官方命令装好对应 CUDA 版 torch，再装本文件其余依赖，避免被覆盖成 CPU 版。
-# 2) 需系统安装 ffmpeg 并加入 PATH（mp3 解码与 demucs 都依赖它）。
-# 3) 建议 Python 3.10 ~ 3.12；3.13 上部分预编译轮子可能缺失。
+# 1) torch 由 demucs 自动带入。需要 GPU 加速时，先按 pytorch.org 官方命令装好
+#    对应 CUDA 版 torch，再装本文件其余依赖，避免被覆盖成 CPU 版。
+# 2) SwiftF0 的 [audio] 附加项装 soxr（重采样），[midi] 装 mido（写 .mid），都在这里一次装齐。
+# 3) 需系统安装 ffmpeg 并加入 PATH（mp3 解码与 demucs 都依赖它）。
+# 4) 建议 Python 3.10 ~ 3.12；3.13 上部分预编译轮子可能缺失。
+# 5) 若要保留旧的 basic-pitch 转写做对比，额外 pip install basic-pitch，代码不再依赖它。
