@@ -8,20 +8,20 @@
 
 ![vocal2midi 管线原理图](docs/pipeline.svg)
 
-代码按"两层 + 两个入口"组织：**分离层**与**转写层**互不耦合，
-`main.py`（命令行）和 `app.py`（网页界面）都只是这两层的调用方。
+代码按「核心层 + 界面层」组织：**分离层**与**转写层**互不耦合，
+桌面界面只是核心层的调用方，`core.pipeline` 是唯一的流水线实现。
 
 ## 使用的库
 
 | 库 | 版本要求 | 角色 |
 |---|---|---|
-| [Demucs](https://github.com/adefossez/demucs) | `>=4.0.1` | 源分离：从混音中剥离人声（默认模型 `htdemucs_ft`） |
-| [SwiftF0](https://github.com/lars76/swift-f0) | `>=0.3.0` | 音高跟踪：人声 → 连续 F0 → MIDI（含 pitch bend） |
-| [Gradio](https://gradio.app) | `>=5.0` | 网页界面（`app.py`） |
+| [Demucs](https://github.com/adefossez/demucs) | `4.1.0` | 源分离：从混音中剥离人声（默认模型 `htdemucs_ft`，权重按需下载） |
+| [SwiftF0](https://github.com/lars76/swift-f0) | `0.3.0` | 音高跟踪：人声 → 连续 F0 → MIDI（含 pitch bend） |
+| [PySide6](https://www.qt.io) | `6.9.3`（Essentials） | 桌面界面，原生窗口，无需浏览器 |
 | [PyTorch](https://pytorch.org) | 随 demucs 自动带入 | Demucs 的推理后端；装 CUDA 版可 GPU 加速 |
-| soundfile / torchaudio | 随上列包带入 | 读写 wav、音频解码 |
-| onnxruntime | 随 swift-f0 自动带入 | SwiftF0 的推理后端（CPU 即可，无需 GPU） |
-| ffmpeg（系统依赖） | — | mp3/flac 解码，Demucs 读非 wav 格式时必需 |
+| soundfile | 随 demucs 带入 | 读写 wav |
+| onnxruntime | 随 swift-f0 带入 | SwiftF0 的推理后端（CPU 即可，无需 GPU） |
+| ffmpeg | imageio-ffmpeg 提供 | mp3/flac 解码；安装版自带 `runtime/bin/ffmpeg.exe` |
 
 Python 包清单见 `requirements.txt`。
 
@@ -33,188 +33,176 @@ Python 包清单见 `requirements.txt`。
 
 ```
 vocal2midi/
-├── src/
-│   ├── app.py            # 入口 1：Gradio 网页 UI
-│   ├── main.py           # 入口 2：命令行（编排：分离 → 转写 → 落盘）
-│   ├── separation.py     # 分离层：Demucs 混音 → 人声 wav
-│   └── transcription.py  # 转写层：人声 wav → 音符 → MIDI / CSV（SwiftF0）
-├── docs/
-│   ├── pipeline.svg      # README 上方的管线原理图（可编辑，深色模式自动换色）
-│   ├── swiftf0-vs-basic-pitch.md        # SwiftF0 与 basic-pitch 的完整实测对比报告
-│   ├── swiftf0_vs_basicpitch_pitch.png  # 逐帧音高对比（连续轨迹 vs 半音台阶）
-│   ├── swiftf0_vs_basicpitch_metrics.png # 音准误差 CDF + 关键指标面板
-│   └── release-notes-v1.0.0.md          # v1.0.0 的 GitHub Release 文案
-├── start.bat             # Windows 一键启动（自动建虚拟环境、装依赖、开界面）
-├── start.sh              # macOS / Linux 一键启动
-├── requirements.txt      # Python 依赖
-├── CHANGELOG.md          # 更新日志
-├── LICENSE
-├── README.md
-└── out/                  # 运行时生成：人声轨、MIDI、CSV
+├── src/vocal2midi/          # 应用包（v2.0.0 起）
+│   ├── __main__.py          # 由 vocal2midi.exe 调起的入口
+│   ├── app.py               # 启动编排：环境准备 → Qt 界面
+│   ├── paths.py             # 所有路径决策集中在这里（安装态/开发态都适用）
+│   ├── core/
+│   │   ├── params.py        # 参数注册表：11 个可调参数 + 自定义文本解析
+│   │   ├── separation.py    # 分离层：Demucs 混音 → 人声 wav
+│   │   ├── transcription.py # 转写层：人声 wav → 音符 → MIDI / CSV（SwiftF0）
+│   │   ├── pipeline.py      # 两阶段流水线：进度 / 日志 / 取消
+│   │   ├── net.py           # 多连接断点续传下载器
+│   │   ├── mirrors.py       # 国内镜像测速与排序
+│   │   ├── installer.py     # 依赖安装引擎（setup.exe 也调用它）
+│   │   ├── weights.py       # demucs 权重按需下载
+│   │   └── environment.py   # 环境自检报告
+│   └── ui/
+│       ├── main_window.py   # 主窗口
+│       ├── theme.py         # 深/浅/跟随系统主题引擎
+│       └── widgets.py       # 卡片、参数行（滑动条 + 输入框联动）
+├── requirements.txt
+└── out/                     # 运行时生成：人声轨、MIDI、CSV
 ```
 
 ### 分层约定
 
-- `src/main.py` 与 `src/app.py` 只调用两层的公开接口：
-  **分离层** `separation.py` → `separate_vocals()`；**转写层** `transcription.py` → `transcribe_to_midi()` / `write_notes_csv()`。
-- 两层可以各自单独运行调试，不必跑整条管线：
-
-  ```bash
-  python src/separation.py "song.mp3" -o out/stems            # 只跑分离
-  python src/transcription.py out/stems/song_vocals.wav -o out  # 只跑转写（可复用现成人声轨）
-  ```
-
-- 换转写引擎（例如把 SwiftF0 换成别的 F0/转录模型）时只改 `transcription.py` 内部，
-  保持 `transcribe_to_midi()` 的签名与事件格式 `(start_s, end_s, pitch_midi, amplitude, [bend…])` 不变，
-  `main.py` / `app.py` 一行都不用改。
-- `main.py` 兼容 `python src/main.py` 与 `python -m src.main` 两种启动方式；
-  `from main import separate_vocals` 这类旧写法仍然有效（`__all__` 已转发）。
-
-输出目录固定为项目根目录的 `out/`，与启动时的工作目录无关。
+- 界面层只调用 `core.pipeline.run_pipeline()`，业务层通过回调上报
+  「进度 / 日志 / 取消」，界面逻辑与业务逻辑彻底解耦。
+- 换转写引擎只改 `core/transcription.py` 内部，保持 `transcribe_file()` 的签名与
+  事件格式 `(start_s, end_s, pitch_midi, amplitude, [bend…])` 不变，界面一行都不用改。
+- 所有路径决策集中在 `paths.py`：同一份代码在「开发态的 src/ 布局」和
+  「安装态的 runtime/ + app/ 布局」下都能找到正确位置。
 
 ## 环境要求
 
-- **Python 3.10 – 3.12**（3.13 及以上部分依赖无预编译包，详见「Python 3.13 已知问题」）
-- **ffmpeg**：须安装并加入 PATH（mp3 解码、Demucs 读非 wav 格式时依赖）
-- 可选：NVIDIA GPU + CUDA 版 PyTorch（可将 Demucs 分离从数分钟缩短到数十秒）
-- 磁盘：首次运行会下载模型权重（Demucs 约数百 MB；SwiftF0 的 ONNX 模型仅 135 KB，随包分发）
+- 安装包**不需要预装 Python 和 ffmpeg**，一切随包/自动下载
+- 可选：NVIDIA GPU + CUDA 版 PyTorch（分离从数分钟缩短到数十秒）
+- 磁盘：安装约 30 MB；依赖 CPU 版约 1.2 GB，GPU 版约 3.8 GB；模型权重 401 MB 按需下载
 
 ## 安装
 
-### 1. 安装 ffmpeg
+下载 `vocal2midi-2.0.0-setup.exe` 双击安装即可。**安装包只有 11 MB**，因为它
+不再打包 torch / demucs / PySide6 这些库，只装程序本体：
 
-```bash
-winget install Gyan.FFmpeg        # Windows
-brew install ffmpeg               # macOS
-sudo apt install ffmpeg           # Debian / Ubuntu
-```
+| 内容 | 体积 |
+|---|---|
+| Python 3.12 embed 运行时 | 11 MB |
+| 应用本体（含全部源码、图标、文档） | ~0.6 MB |
+| 启动器 `vocal2midi.exe` | 51 KB |
+| **安装包压缩后** | **11 MB** |
 
-安装后**新开一个终端**，确认 `ffmpeg -version` 能正常输出。
+依赖在安装时自动处理：
 
-### 2. 安装 Python 依赖
+1. 安装器**实测国内镜像的真实下载速度**（不是只 ping 延迟），排出快慢顺序
+2. 从最快的镜像下载全部依赖；失败会自动换下一个镜像（共尝试前 3 名）
+3. 自动识别显卡：有 NVIDIA 显卡就装 CUDA 版 torch（约 2.7 GB），否则装 CPU 版（约 105 MB）
+4. 全部装完做一次导入自检，通过后写标记文件，之后启动不再检查
 
-```bash
-python -m venv .venv
+安装向导支持**深色/浅色自动跟随系统**。安装完成后开始菜单有「vocal2midi」；
+也可以直接运行安装目录下的 `vocal2midi.exe`。
 
-.venv\Scripts\activate            # Windows
-# source .venv/bin/activate       # macOS / Linux
-
-pip install -r requirements.txt
-```
-
-> **GPU 用户**：请先按 [pytorch.org](https://pytorch.org) 官方指引安装与显卡匹配的 CUDA 版 torch，再执行 `pip install -r requirements.txt`，避免被依赖解析器覆盖回 CPU 版。
-
-首次运行时 Demucs 会自动下载模型权重，需保持联网（SwiftF0 的模型已随 PyPI 包分发，无需额外下载）。
+> 依赖装到一半可以取消；下次运行 `vocal2midi.exe --repair` 会接着装。
 
 ## 快速开始
 
-### 网页界面（推荐）
+双击桌面或开始菜单里的 **vocal2midi** 即可打开原生窗口（无需浏览器）：
 
-```bash
-python src/app.py
+1. 选择或拖入歌曲（mp3 / wav / flac）；若文件已是干声人声，勾选「已是人声轨（跳过分离）」
+2. 点击「开始转换」，进度条依次显示：
+   `人声分离 → 人声转 MIDI → 写出音符表 → 全部完成`
+3. 完成后界面直接给出 MIDI / CSV 的文件路径，点「打开输出目录」即可取件
+4. 关闭窗口即退出程序，无残留后台进程
+
+**界面分为三个标签页：**
+
+| 标签页 | 内容 |
+|---|---|
+| 人声分离 | 分离模型、计算设备、输出目录、运行选项 |
+| 转写参数 | 11 个参数，每个都是「滑动条 + 可编辑输入框」联动 |
+| 自定义参数 | 自由文本，批量覆写参数（见下） |
+
+**主题**：标题栏右侧的下拉框可选「跟随系统 / 浅色 / 深色」。选择「跟随系统」时，
+程序会监听 Windows 的浅色/深色切换并实时跟着变。
+
+**转写参数**：每个参数都有一个滑动条和一个输入框，两者实时联动 ——
+拖动滑块时输入框同步更新，也可以在输入框里直接键入精确数值（回车或失去焦点生效）。
+超出范围会自动夹到边界并标红提示。
+
+| 参数 | 范围 | 默认 | 说明 |
+|---|---|---|---|
+| `onset_threshold` 音符切分灵敏度 | 0.3 – 0.9 | 0.5 | 调高 → 音符更长更少，抑制碎音 |
+| `frame_threshold` 发音置信度阈值 | 0.05 – 0.95 | 0.3 | 低于该置信度的音符被丢弃 |
+| `min_note_length_ms` 最短音符时长 | 10 – 400 | 50 | 毫秒 |
+| `f0_min` / `f0_max` 基频范围 | 40 – 400 / 200 – 2000 | 70 / 900 | Hz，超出人声音域容易出鬼音 |
+| `pitch_hold_ms` 音高保持时长 | 0 – 200 | 0 | 0 = 按灵敏度自动推导 |
+| `velocity_floor` 力度下限 | 0 – 0.6 | 0 | 避免弱唱音符力度过低 |
+| `bend_range` 弯音范围 | 0 – 24 | 2 | 半音数，0 = 不写 pitch bend |
+| `tempo` 节拍速度 | 40 – 240 | 120 | BPM，写入 MIDI 的 set_tempo |
+| `quantize` 量化精度 | off / 1/4 / 1/8 / 1/16 / 1/32 | off | 对齐到网格 |
+| `transpose` 移调 | -24 – 24 | 0 | 半音 |
+
+**自定义参数**：在「自定义参数」页里可以一次写多个参数，支持四种写法
+（空格、逗号、分号、换行都能分隔）：
+
+```
+onset_threshold=0.45 min_note_length_ms=60 quantize=1/16 transpose=-2
+--f0_min 55, --f0_max 1200
+tempo: 96
+bend_range 4
 ```
 
-浏览器自动打开 `http://127.0.0.1:7860`，操作流程：
-
-1. 拖入歌曲（mp3 / wav / flac）；若上传的已是干声人声，勾选「上传的已是人声轨（跳过 Demucs 分离）」
-2. 点击「开始转换」，主界面进度条依次显示：
-   `检查输入 → Demucs 分离中 → SwiftF0 转写 → 导出音符表 → 完成`
-3. 右侧可试听人声轨，并下载 MIDI 与音符 CSV
-4. 不想用了点「退出程序」直接关掉服务
-
-界面可切换 Demucs 模型（`htdemucs_ft` / `htdemucs` / `mdx_extra_q`）、计算设备（`auto` / `cpu` / `cuda`）、
-是否忽略人声轨缓存；转写参数折叠在页面下方的「高级参数」里。
-
-**UI 启动参数**
-
-| 参数 | 默认值 | 说明 |
-|---|---|---|
-| `--port` | `7860` | 监听端口 |
-| `--idle-timeout` | `60` | 页面全部关闭且无任务运行 N 秒后自动退出、释放端口；`0` 关闭该功能 |
-| `--no-browser` | 关 | 启动时不自动打开浏览器 |
-
-> 关闭页面后自动释放端口：浏览器与服务端之间没有"标签页已关闭"的原生通知，
-> 因此页面每 5 秒发一次心跳、关闭/刷新时用 `sendBeacon` 发一次告别，
-> 服务端看门狗确认"曾有过页面 + 无任务在跑 + 超时"后退出进程。
-
-### 命令行
-
-```bash
-# 完整流程：分离 + 转写
-python src/main.py "浮夸.mp3"
-
-# 已有人声轨，仅转写（跳过最慢的分离步骤）
-python src/main.py --vocals out/stems/浮夸_vocals.wav
-
-# 常用调优示例：抑制碎音与鬼音
-python src/main.py "浮夸.mp3" --onset 0.8 --min-note-len 100
-```
+输入时会实时解析并显示识别结果；写错的键名会单独提示，不会影响其它参数生效。
+自定义参数优先级高于滑动条。
 
 ## 输出说明
 
-所有产物输出至 `out/` 目录：
+所有产物输出至 `out/` 目录（安装版为安装目录下的 `out/`）：
 
 | 文件 | 说明 |
 |---|---|
-| `stems/<歌名>_vocals.wav` | Demucs 分离出的人声轨（自动缓存，重复运行不重算；可在 UI 中试听） |
+| `stems/<歌名>_vocals.wav` | Demucs 分离出的人声轨（自动缓存，重复运行不重算） |
 | `<歌名>_vocals.mid` | 最终人声 MIDI，含 pitch bend，可直接拖入 DAW |
 | `<歌名>_vocals_notes.csv` | 音符事件明细（起始 / 结束 / 时长 / 音高 / 幅度 / 弯音），可用 Excel 打开核对 |
 
 ## 参数参考
 
-### 命令行参数
+### 参数优先级
 
-| 参数 | 默认值 | 说明 |
-|---|---|---|
-| `input` | — | 输入歌曲文件（`mp3` / `wav` / `flac` …） |
-| `-o, --out` | `out` | 输出目录 |
-| `--vocals` | — | 指定已分离的人声文件，跳过 Demucs |
-| `--model` | `htdemucs_ft` | Demucs 模型（fine-tuned 版，效果优于默认 `htdemucs`） |
-| `--device` | `auto` | 计算设备：`auto` / `cpu` / `cuda`（只影响分离层） |
-| `--overwrite` | 关 | 强制重新分离，忽略人声轨缓存 |
-| `--onset` | `0.5` | 音符切分灵敏度（映射到 SwiftF0 的 `pitch_hold_ms`，调高音符更长更少） |
-| `--frame` | `0.3` | 发声置信度阈值（音符覆盖帧的平均置信度低于此值则丢弃） |
-| `--min-note-len` | `50` | 最短音符时长（毫秒） |
-| `--f0-min` / `--f0-max` | `70` / `900` | 人声基频范围（Hz），`0` 为不限制 |
-| `-v, --verbose` | 关 | 输出调试日志 |
+`默认值 < 滑动条/输入框 < 自定义参数文本`
 
 ### 调优指南
 
 | 症状 | 建议调整 |
 |---|---|
-| 短碎音、鬼音较多 | `--onset 0.7~0.9`（音符切分更保守），`--min-note-len 100~150` |
-| 音符拖尾、该断不断 | `--onset 0.3~0.4`（切得更细） |
-| 出现八度/五度错音 | 收紧 `--f0-min` / `--f0-max` 至实际人声音域 |
-| 弱唱、气声音符漏检 | `--frame 0.2`，放宽 `--f0-min` |
-| 伴奏残留过多 | 确认使用 `--model htdemucs_ft`，或改用 `mdx_extra_q` 对比 |
+| 短碎音、鬼音较多 | 切分灵敏度 `0.7~0.9`（更保守），最短音符 `100~150` ms |
+| 音符拖尾、该断不断 | 切分灵敏度 `0.3~0.4`（切得更细） |
+| 出现八度/五度错音 | 收紧最低/最高音高至实际人声音域 |
+| 弱唱、气声音符漏检 | 置信度阈值 `0.2`，并适当提高力度下限 |
+| 音符对不上节拍 | `quantize` 设为 `1/16`，并把 `tempo` 设成歌曲实际 BPM |
+| 伴奏残留过多 | 确认使用 `htdemucs_ft`，或改用 `mdx_extra_q` 对比 |
 
 ## 常见问题
 
 | 问题 | 原因与解决 |
 |---|---|
-| `ffmpeg not found` 或 mp3 解码失败 | ffmpeg 未安装或不在 PATH，重开终端验证 `ffmpeg -version` |
-| 分离阶段卡在下载模型 | 首次运行需联网拉取权重；若走代理，确认代理放行了模型下载域名 |
-| 分离非常慢 | 运行在 CPU 上；有 N 卡时安装 CUDA 版 torch 并选 `--device cuda` |
-| 提示未安装 swift-f0 | `pip install "swift-f0[audio,midi]"` |
-| `No module named 'gradio'` | 终端里的 `python` 与装依赖的解释器不是同一个，用同一解释器重装依赖 |
-| 关闭页面后端口仍被占用 | 用 `--idle-timeout`（默认 60 秒）等待自动退出，或调小该值 |
-| 未检出任何音符 | 调低 `--onset` / `--frame`；确认 `--f0-min` / `--f0-max` 覆盖了实际音域 |
+| `ffmpeg not found` 或 mp3 解码失败 | 安装版自带 `runtime/bin/ffmpeg.exe`，不应出现；若被清理可运行 `vocal2midi.exe --repair` 补回 |
+| 首次启动在测速/安装 | 正常：程序在实测国内镜像速度并下载依赖（GPU 版 torch 约 2.7 GB） |
+| 安装依赖失败 | 运行 `vocal2midi.exe --repair` 重新测速并续装 |
+| 分离非常慢 | 用的是 CPU 版 torch；`--repair` 时选 `cu128`，或在界面里把设备设成 `cuda` |
+| 安装 CUDA 版后仍显示 CPU | 确认显卡驱动支持 CUDA 12.8 以上（RTX 50 系必须）；旧驱动请升级 |
+| 卡在「加载模型」很久 | 首次运行要下载 401 MB 权重；国内直连官方源很慢，程序会优先走 HF 镜像 |
+| 提示未安装 swift-f0 | 运行 `vocal2midi.exe --repair` 补装依赖 |
+| `No module named 'PySide6'` | 运行 `vocal2midi.exe --repair` 补装依赖 |
+| 模型权重占空间 | 缓存在 `%LOCALAPPDATA%\vocal2midi\cache\torch`，可随时删除，下次运行会重新下载 |
+| 未检出任何音符 | 调低切分/帧判定阈值；确认音高范围覆盖实际音域 |
 | 转出结果有不少错音 | 属预期，见「效果预期」 |
 
 ### Python 3.13 说明
 
-改用 SwiftF0 后不再有 TensorFlow 依赖，Python 3.13 上不再需要特殊安装步骤（旧版 basic-pitch 必须绕开 TF，问题是 TF 2.15 没有 3.13 的轮子）。SwiftF0 要求 Python ≥ 3.8，纯 onnxruntime + numpy，3.13 可直接 `pip install -r requirements.txt`。
+改用 SwiftF0 后不再有 TensorFlow 依赖。SwiftF0 要求 Python ≥ 3.8，纯 onnxruntime + numpy。
+安装包已内置 Python 3.12 运行时，不受本机 Python 版本影响。
 
 ## 效果预期
 
 - SwiftF0 是单声部 F0 跟踪器，正好匹配"Demucs 已把伴奏剥掉"的前提；它的输出是连续音高，写进 MIDI 时通过 pitchwheel 保留颤音与滑音。
 - 实测（210 秒日文歌曲人声轨）：回放 MIDI 对 pYIN 参照的中位误差 9.2¢、91% 的音符在 ±50¢ 内、八度错误 0.75%。
 - 人声转谱本身不存在唯一正确答案。Spotify 的 vocadito 数据集实验显示，两位专业乐手独立标注同一段人声，互相一致性 F-measure 仅 0.64。因此本类工具的准确率上限约 70~80%。
-- 本项目不做时间量化（保留演唱的真实节奏），对拍、量化请在 DAW 中完成。
+- 默认不做时间量化（保留演唱的真实节奏）；需要对齐时把「量化精度」设为 `1/16` 之类即可。
 
 ## 更新日志
 
-见 [`CHANGELOG.md`](CHANGELOG.md)。当前版本 **v1.0.0**（转写引擎换成 SwiftF0）。
+见 [`CHANGELOG.md`](CHANGELOG.md)。当前版本 **v2.0.0**（架构重构 + 11MB 安装包 + 深浅主题 + 自定义参数）。
 
 ## 许可证
 
@@ -224,5 +212,5 @@ python src/main.py "浮夸.mp3" --onset 0.8 --min-note-len 100
 |---|---|
 | Demucs | MIT |
 | SwiftF0 | MIT |
-| Gradio | Apache 2.0 |
+| PySide6 | LGPL-3.0 |
 | PyTorch | BSD-3-Clause |

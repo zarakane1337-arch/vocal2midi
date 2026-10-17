@@ -1,0 +1,9 @@
+# 仓库里实际存在的文本文件统一按 LF 存储、按平台换行符检出
+* text=auto
+
+# 二进制资源（当前仓库有 .png 与 .ico）
+*.png binary
+*.ico binary
+
+# SVG 是文本，不参与二进制检测
+*.svg text
