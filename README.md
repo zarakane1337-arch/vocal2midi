@@ -72,7 +72,7 @@ vocal2midi/
 
 ## 安装
 
-下载 `vocal2midi-2.0.0-setup.exe` 双击安装即可。**安装包只有 11 MB**，因为它
+下载 `vocal2midi-2.0.0-setup.exe` 双击安装即可。**安装包只有 10.8 MB**，因为它
 不再打包 torch / demucs / PySide6 这些库，只装程序本体：
 
 | 内容 | 体积 |
