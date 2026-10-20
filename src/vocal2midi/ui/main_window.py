@@ -2,12 +2,13 @@
 
 布局结构（自上而下）：
     顶栏      应用名 + 环境徽标 + 主题切换 + 设置菜单
-    文件卡片  拖放区 / 浏览按钮 / 最近使用
+    队列卡片  曲目列表 / 添加 / 删除 / 清空
     参数卡片  标签页：分离设置 / 转写参数（滑块 + 输入框）/ 自定义参数
-    操作区    开始转换 / 取消 + 进度条 + 状态
-    结果卡片  输出文件链接 + 打开目录 + 日志折叠
+    操作区    开始转换 / 取消 + 整体进度条 + 状态
+    结果卡片  汇总 + 打开批次目录 + 日志折叠
 
-所有业务逻辑都通过 core.* 调用，界面本身不含算法。
+所有业务逻辑都通过 core.* 调用，界面本身不含算法。「一次跑多首」这件事由
+`core.batch` 编排，窗口只负责把队列交给它、再把进度与结果画出来。
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import logging
 import os
 import subprocess
 import sys
+from html import escape
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QTimer, QUrl, Signal
@@ -44,12 +46,15 @@ from PySide6.QtWidgets import (
 
 from .. import APP_TITLE, __version__, paths
 from ..core import environment, params as param_registry, separation, settings as settings_mod
-from ..core.pipeline import AUDIO_EXTS, PipelineOptions
+from ..core.batch import BatchOptions, BatchResult, downgrade_missing_products
+from ..core.pipeline import AUDIO_EXTS
+from ..core.queue import Queue, QueueItem, TrackStatus
 from ..core.transcription import TranscriptionParams
+from .batch_worker import BatchWorker
 from .deps_dialog import DependencyDialog
+from .queue_panel import QueuePanel
 from .theme import THEME_DARK, THEME_LIGHT, THEME_SYSTEM, ThemeManager
 from .widgets import Card, ChoiceRow, ParamRow, make_path_label, scroll_page
-from .worker import PipelineWorker
 
 log = logging.getLogger("vocal2midi.window")
 
@@ -57,46 +62,17 @@ THEME_LABELS = {"system": "跟随系统", "light": "浅色", "dark": "深色"}
 AUDIO_FILTER = "音频文件 (" + " ".join("*" + ext for ext in AUDIO_EXTS) + ");;所有文件 (*.*)"
 
 
-class DropLineEdit(QLineEdit):
-    """支持拖放音频文件的路径输入框。"""
-
-    fileDropped = Signal(str)
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setAcceptDrops(True)
-        self.setPlaceholderText("拖入音频文件，或点击右侧「浏览…」")
-        self.setClearButtonEnabled(True)
-
-    # ---- 拖放 -----------------------------------------------------------
-    def dragEnterEvent(self, event: QDragEnterEvent) -> None:  # noqa: N802
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-
-    def dragMoveEvent(self, event) -> None:  # noqa: N802
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-
-    def dropEvent(self, event: QDropEvent) -> None:  # noqa: N802
-        for url in event.mimeData().urls():
-            path = url.toLocalFile()
-            if path and Path(path).suffix.lower() in AUDIO_EXTS:
-                self.setText(path)
-                self.fileDropped.emit(path)
-                event.acceptProposedAction()
-                return
-        event.ignore()
-
-
 class MainWindow(QMainWindow):
     def __init__(self, settings: settings_mod.Settings | None = None) -> None:
         super().__init__()
         self.settings = settings or settings_mod.Settings.load()
         self.report = environment.inspect()
-        self.worker: PipelineWorker | None = None
+        self.worker: BatchWorker | None = None
+        self.queue = Queue.from_dicts(self.settings.queue)
         self.params_rows: dict[str, ParamRow] = {}
         self.choice_rows: dict[str, ChoiceRow] = {}
-        self._last_result = None
+        self._last_result: BatchResult | None = None
+        self._running = False
 
         self.theme = ThemeManager(QApplication.instance(), self)
         self.theme.apply(self.settings.theme)
@@ -123,7 +99,7 @@ class MainWindow(QMainWindow):
         outer.setSpacing(12)
 
         outer.addWidget(self._build_header())
-        outer.addWidget(self._build_file_card())
+        outer.addWidget(self._build_queue_card())
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_separation_tab(), "人声分离")
@@ -203,31 +179,21 @@ class MainWindow(QMainWindow):
         menu.addAction(act_about)
         return menu
 
-    # ---- 文件卡片 -------------------------------------------------------
-    def _build_file_card(self) -> QWidget:
-        card = Card("音频文件", "支持 mp3 / wav / flac / m4a / ogg 等格式，可直接把文件拖进输入框")
-        row = QHBoxLayout()
-        row.setSpacing(8)
-        self.file_edit = DropLineEdit()
-        self.file_edit.fileDropped.connect(lambda _p: self._update_convert_enabled())
-        self.file_edit.textChanged.connect(lambda _t: self._update_convert_enabled())
-        row.addWidget(self.file_edit, 1)
+    # ---- 队列卡片 -------------------------------------------------------
+    def _build_queue_card(self) -> QWidget:
+        card = Card(
+            "歌曲队列",
+            "一次可以排入多首；点「开始转换」后按顺序逐首跑完，某一首失败不影响其余",
+        )
+        self.queue_panel = QueuePanel(self.queue)
+        self.queue_panel.addRequested.connect(self._browse_files)
+        self.queue_panel.changed.connect(self._on_queue_changed)
+        self.queue_panel.rejected.connect(self._on_paths_rejected)
+        self.queue_panel.openProducts.connect(self._open_products)
+        self.queue_panel.openBatchDir.connect(lambda item: self._open_dir(Path(item.batch_dir)))
+        card.body.addWidget(self.queue_panel)
 
-        browse = QPushButton("浏览…")
-        browse.clicked.connect(self._browse_file)
-        row.addWidget(browse)
-
-        recent = QPushButton("最近")
-        recent.setToolTip("选择最近使用过的文件")
-        recent_menu = QMenu(recent)
-        self.recent_menu = recent_menu
-        recent_menu.aboutToShow.connect(self._fill_recent_menu)
-        recent.setMenu(recent_menu)
-        row.addWidget(recent)
-        card.body.addLayout(row)
-
-        self.drop_hint = QLabel("把音频文件拖到窗口任意位置也可以")
-        self.drop_hint.setObjectName("Faint")
+        self.drop_hint = QLabel("把音频文件拖到窗口任意位置也可以", objectName="Faint")
         card.body.addWidget(self.drop_hint)
         return card
 
@@ -441,6 +407,7 @@ class MainWindow(QMainWindow):
         self.csv_check.setChecked(s.write_csv)
         self.output_edit.setText(s.output_dir)
         self.custom_edit.setPlainText(s.custom_params)
+        self.queue_panel.refresh()
 
         stored = param_registry.normalize(s.params)
         for key, row in self.params_rows.items():
@@ -466,6 +433,7 @@ class MainWindow(QMainWindow):
         for key, row in self.choice_rows.items():
             payload[key] = row.value
         s.params = payload
+        s.queue = self.queue.to_dicts()
 
         s.window_width = max(880, self.width())
         s.window_height = max(640, self.height())
@@ -583,39 +551,20 @@ class MainWindow(QMainWindow):
     # ==================================================================
     # 交互
     # ==================================================================
-    def _browse_file(self) -> None:
+    def _browse_files(self) -> None:
         start_dir = ""
-        current = self.file_edit.text().strip()
-        if current:
-            start_dir = str(Path(current).parent)
-        elif self.settings.recent_files:
+        if self.settings.recent_files:
             start_dir = str(Path(self.settings.recent_files[0]).parent)
-        path, _ = QFileDialog.getOpenFileName(self, "选择音频文件", start_dir, AUDIO_FILTER)
-        if path:
-            self.file_edit.setText(path)
-            self._remember(path)
+        paths, _ = QFileDialog.getOpenFileNames(self, "添加歌曲", start_dir, AUDIO_FILTER)
+        if paths:
+            self.queue_panel.add_paths(paths)
+            self._remember(paths[-1])
 
     def _browse_output_dir(self) -> None:
         start = self.output_edit.text().strip() or str(self.settings.resolved_output_dir())
         path = QFileDialog.getExistingDirectory(self, "选择输出目录", start)
         if path:
             self.output_edit.setText(path)
-
-    def _fill_recent_menu(self) -> None:
-        self.recent_menu.clear()
-        recent = [p for p in self.settings.recent_files if Path(p).exists()]
-        if not recent:
-            action = self.recent_menu.addAction("（暂无记录）")
-            action.setEnabled(False)
-            return
-        for item in recent[:8]:
-            action = self.recent_menu.addAction(Path(item).name)
-            action.setToolTip(item)
-            action.triggered.connect(lambda _checked=False, p=item: self._use_recent(p))
-
-    def _use_recent(self, path: str) -> None:
-        self.file_edit.setText(path)
-        self._remember(path)
 
     def _remember(self, path: str) -> None:
         self.settings.remember_file(path)
@@ -661,9 +610,33 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, lambda: fn(*args))
 
     def _update_convert_enabled(self) -> None:
-        has_file = bool(self.file_edit.text().strip())
+        pending = len(self.queue.pending_items())
         running = bool(self.worker and self.worker.isRunning())
-        self.convert_button.setEnabled(has_file and not running)
+        self.convert_button.setEnabled(bool(pending) and not running)
+        if running:
+            return
+        if not self.queue.total:
+            self.convert_button.setToolTip("队列为空，先添加歌曲")
+        elif not pending:
+            self.convert_button.setToolTip("所有曲目都已完成，没有待转换的曲目")
+        else:
+            self.convert_button.setToolTip(f"将转换 {pending} 首曲目")
+
+    def _on_queue_changed(self) -> None:
+        self._save_queue()
+        self._update_convert_enabled()
+
+    def _on_paths_rejected(self, rejected: list) -> None:
+        if not rejected:
+            return
+        lines = [f"{Path(path).name or path}：{reason}" for path, reason in rejected[:6]]
+        if len(rejected) > 6:
+            lines.append(f"…共 {len(rejected)} 个未能加入")
+        QMessageBox.warning(self, "部分文件未加入队列", "\n".join(lines))
+
+    def _save_queue(self) -> None:
+        self.settings.queue = self.queue.to_dicts()
+        self.settings.save()
 
     # ==================================================================
     # 转换流程
@@ -679,16 +652,20 @@ class MainWindow(QMainWindow):
         payload.update(custom.values)
         return TranscriptionParams.from_mapping(payload)
 
+    def _make_options(self) -> BatchOptions:
+        out_text = self.output_edit.text().strip()
+        return BatchOptions(
+            out_dir=Path(out_text) if out_text else paths.default_output_dir(),
+            model=str(self.model_combo.currentData()),
+            device=str(self.device_combo.currentData()),
+            vocals_only=self.vocals_only_check.isChecked(),
+            overwrite=self.overwrite_check.isChecked(),
+            params=self._current_params(),
+            write_csv=self.csv_check.isChecked(),
+        )
+
     def _on_convert_clicked(self) -> None:
         if self.worker and self.worker.isRunning():
-            return
-        audio = self.file_edit.text().strip()
-        if not audio:
-            QMessageBox.warning(self, "缺少输入", "请先选择要转换的音频文件")
-            return
-        path = Path(audio)
-        if not path.exists():
-            QMessageBox.warning(self, "文件不存在", f"找不到文件：\n{audio}")
             return
 
         custom = param_registry.parse_custom_params(self.custom_edit.toPlainText())
@@ -714,40 +691,54 @@ class MainWindow(QMainWindow):
             )
             return
 
-        out_dir = Path(self.output_edit.text().strip()) if self.output_edit.text().strip() else paths.default_output_dir()
-        options = PipelineOptions(
-            audio_path=path,
-            out_dir=out_dir,
-            model=str(self.model_combo.currentData()),
-            device=str(self.device_combo.currentData()),
-            vocals_only=self.vocals_only_check.isChecked(),
-            overwrite=self.overwrite_check.isChecked(),
-            params=self._current_params(),
-            write_csv=self.csv_check.isChecked(),
-        )
+        # 批次开始前扫一遍：状态是完成但产物已不在的，退回待转换。
+        downgraded = downgrade_missing_products(self.queue.items)
+        if downgraded:
+            self.queue_panel.refresh()
+            self._save_queue()
+            self._append_log(f"{len(downgraded)} 首曲目的产物已不在，已退回待转换")
 
-        self._remember(str(path))
+        items = self.queue.pending_items()
+        if not items:
+            self._update_convert_enabled()
+            QMessageBox.information(
+                self,
+                "没有待转换的曲目",
+                "队列里的曲目都已经完成了。要重新转换，请先删除它再重新添加。",
+            )
+            return
+
+        options = self._make_options()
+        self._remember(items[0].path)
+
         self.log_view.clear()
-        self.log_view.appendPlainText(f"输入：{path}")
-        self.log_view.appendPlainText(f"参数：{param_registry.describe_params(options.params.as_mapping())}")
+        self.log_view.appendPlainText(f"本批曲目：{len(items)} 首")
+        self.log_view.appendPlainText(
+            f"参数：{param_registry.describe_params(options.params.as_mapping())}"
+        )
         self.progress.setValue(0)
-        self._set_running(True)
         self.status_label.setText("准备开始…")
+        self._set_running(True)
 
-        self.worker = PipelineWorker(options, self)
+        self.worker = BatchWorker(items, options, parent=self)
         self.worker.progress.connect(self._on_progress)
         self.worker.logged.connect(self._append_log)
+        self.worker.trackChanged.connect(self._on_track_changed)
         self.worker.finishedOk.connect(self._on_finished)
         self.worker.failed.connect(self._on_failed)
         self.worker.cancelledByUser.connect(self._on_cancelled)
         self.worker.finished.connect(self._on_worker_finished)
         self.worker.start()
 
+    def _on_track_changed(self, item: QueueItem) -> None:
+        self.queue_panel.refresh()
+        self._save_queue()
+
     def _set_running(self, running: bool) -> None:
-        self.convert_button.setEnabled(not running and bool(self.file_edit.text().strip()))
+        self._running = running
         self.cancel_button.setEnabled(running)
+        self.queue_panel.set_locked(running)
         for widget in (
-            self.file_edit,
             self.model_combo,
             self.device_combo,
             self.output_edit,
@@ -758,6 +749,7 @@ class MainWindow(QMainWindow):
             self.tabs,
         ):
             widget.setEnabled(not running)
+        self._update_convert_enabled()
 
     def _on_cancel_clicked(self) -> None:
         if self.worker and self.worker.isRunning():
@@ -769,32 +761,54 @@ class MainWindow(QMainWindow):
         self.progress.setValue(int(max(0.0, min(1.0, fraction)) * 1000))
         self.status_label.setText(text)
 
-    def _on_finished(self, result) -> None:
+    def _on_finished(self, result: BatchResult) -> None:
         self._last_result = result
         self.progress.setValue(1000)
-        self.status_label.setText(f"完成 · {result.note_count} 个音符 · 用时 {result.elapsed_s:.1f}s")
-        links = []
-        if result.midi_path:
-            links.append(f'<a href="{Path(result.midi_path).as_uri()}">MIDI</a>')
-        if result.csv_path:
-            links.append(f'<a href="{Path(result.csv_path).as_uri()}">音符 CSV</a>')
-        if result.vocals_path:
-            links.append(f'<a href="{Path(result.vocals_path).as_uri()}">人声 WAV</a>')
-        self.result_label.setText("生成文件：" + " · ".join(links) if links else "未生成文件")
-        self._append_log(f"完成：{result.note_count} 个音符，用时 {result.elapsed_s:.1f}s")
+        self.queue_panel.refresh()
+        self._save_queue()
+
+        summary = f"成功 {result.ok_count}"
+        if result.failed_count:
+            summary += f" · 失败 {result.failed_count}"
+        self.status_label.setText(f"批次结束 · {summary} · 用时 {result.elapsed_s:.1f}s")
+        self._append_log(f"批次结束：{summary}，用时 {result.elapsed_s:.1f}s")
+
+        lines = [f"<b>{summary}</b>"]
+        if result.failed:
+            lines.append(
+                "失败曲目："
+                + "、".join(escape(failure.item.display_name) for failure in result.failed)
+            )
+            for failure in result.failed:
+                self._append_log(f"  失败：{failure.item.display_name} — {failure.reason}")
+        links = [
+            f'<a href="{Path(batch_dir).as_uri()}">批次目录</a>'
+            for batch_dir in result.batch_dirs
+        ]
+        if links:
+            lines.append(" · ".join(links))
+        self.result_label.setText("<br>".join(lines))
 
     def _on_failed(self, message: str) -> None:
         self.progress.setValue(0)
-        self.status_label.setText("转换失败")
+        self.status_label.setText("批次失败")
         self._append_log("错误：" + message)
         self.log_view.setVisible(True)
         self.log_toggle.setChecked(True)
-        QMessageBox.critical(self, "转换失败", message)
+        self.queue_panel.refresh()
+        self._save_queue()
+        QMessageBox.critical(self, "批次失败", message)
 
-    def _on_cancelled(self) -> None:
-        self.progress.setValue(0)
-        self.status_label.setText("已取消")
-        self._append_log("用户取消了转换")
+    def _on_cancelled(self, result: BatchResult | None = None) -> None:
+        self.queue_panel.refresh()
+        self._save_queue()
+        self._append_log("用户取消了批次")
+        if result is not None and not result.cancelled:
+            self.status_label.setText("已取消")
+            return
+        remaining = result.remaining if result is not None else 0
+        ok_count = result.ok_count if result is not None else 0
+        self.status_label.setText(f"已取消 · 成功 {ok_count} · 未处理 {remaining}")
 
     def _on_worker_finished(self) -> None:
         self._set_running(False)
@@ -805,6 +819,9 @@ class MainWindow(QMainWindow):
     # ==================================================================
     def _open_output_dir(self) -> None:
         target = Path(self.output_edit.text().strip()) if self.output_edit.text().strip() else paths.default_output_dir()
+        self._open_dir(target)
+
+    def _open_dir(self, target: Path) -> None:
         if not target.exists():
             try:
                 target.mkdir(parents=True, exist_ok=True)
@@ -812,6 +829,17 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "无法打开", str(exc))
                 return
         self._open_path(target)
+
+    def _open_products(self, item: QueueItem) -> None:
+        """双击/右键「打开产物」：优先开 MIDI，没有就开它所在目录。"""
+        for candidate in (item.midi_path, item.csv_path, item.vocals_path):
+            if candidate and Path(candidate).is_file():
+                self._open_path(Path(candidate))
+                return
+        if item.batch_dir:
+            self._open_dir(Path(item.batch_dir))
+            return
+        QMessageBox.information(self, "暂无产物", "这首曲目还没有生成可打开的文件。")
 
     def _open_path(self, target: Path) -> None:
         if sys.platform.startswith("win"):
@@ -842,12 +870,14 @@ class MainWindow(QMainWindow):
             event.acceptProposedAction()
 
     def dropEvent(self, event: QDropEvent) -> None:  # noqa: N802
-        for url in event.mimeData().urls():
-            path = url.toLocalFile()
-            if path and Path(path).suffix.lower() in AUDIO_EXTS:
-                self.file_edit.setText(path)
-                self._remember(path)
-                self._update_convert_enabled()
-                event.acceptProposedAction()
-                return
-        event.ignore()
+        paths = [
+            url.toLocalFile()
+            for url in event.mimeData().urls()
+            if url.toLocalFile() and Path(url.toLocalFile()).suffix.lower() in AUDIO_EXTS
+        ]
+        if not paths:
+            event.ignore()
+            return
+        self.queue_panel.add_paths(paths)
+        self._remember(paths[-1])
+        event.acceptProposedAction()

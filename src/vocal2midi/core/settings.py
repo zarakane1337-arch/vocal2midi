@@ -40,6 +40,9 @@ class Settings:
     # 最近使用的文件
     recent_files: list[str] = field(default_factory=list)
 
+    # 队列：跨批次存续的曲目列表（不复用 recent_files 的 8 条上限）
+    queue: list[dict[str, Any]] = field(default_factory=list)
+
     # 窗口状态
     window_width: int = 980
     window_height: int = 760
@@ -51,6 +54,8 @@ class Settings:
         if self.theme not in THEMES:
             self.theme = "system"
         self.recent_files = [p for p in self.recent_files if isinstance(p, str)][:8]
+        if not isinstance(self.queue, list):
+            self.queue = []
 
     # ---- 读写 -----------------------------------------------------------
     @classmethod
