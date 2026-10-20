@@ -21,6 +21,7 @@ from typing import Callable, Protocol
 
 from .. import paths
 from .cancellation import Cancelled
+from .names import vocals_file
 
 log = logging.getLogger("vocal2midi.separation")
 
@@ -77,12 +78,8 @@ def resolve_device(name: str) -> str:
 # ---- 产物命名与复用判定 -------------------------------------------------
 
 
-def vocals_file(out_dir: str | Path, stem: str) -> Path:
-    """人声轨的落盘位置：由**目录 + 主名**决定，与输入文件路径无关。
-
-    这一点是重试能复用已有轨的前提：重试时必须命中同一个文件。
-    """
-    return Path(out_dir) / f"{stem}_vocals.wav"
+# 产物命名只有一处定义（`core.names`）。这里重新导出 `vocals_file`，因为
+# 分离层的对外契约包含「人声轨落在 <out_dir>/<stem>_vocals.wav」这一条。
 
 
 def is_reusable_vocals(target: str | Path) -> bool:

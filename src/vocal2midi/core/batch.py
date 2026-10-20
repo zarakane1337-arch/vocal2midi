@@ -18,16 +18,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable, Protocol, Sequence
 
-from . import separation, transcription
+from . import names, separation, transcription
 from .cancellation import Cancelled
+from .pipeline import STAGE_WEIGHTS
 from .queue import QueueItem, TrackStatus
 from .transcription import TranscriptionParams
 
 log = logging.getLogger("vocal2midi.batch")
 
-# 单首曲目内部的两个阶段在总进度里的边界。写盘那一步由 `transcribe` 依赖
-# 一并完成（同一个依赖写了 midi 和 csv），所以它的占比折进了转写里。
-SEPARATE_END = 0.62
+# 单首曲目内部各阶段在总进度里的边界。占比只在 `pipeline.STAGE_WEIGHTS` 里
+# 定义一次，这里只做累加——否则批次报出的阶段进度会和单曲流水线对不上。
+SEPARATE_END = STAGE_WEIGHTS["separate"]
+TRANSCRIBE_END = SEPARATE_END + STAGE_WEIGHTS["transcribe"]
 
 ProgressFn = Callable[[float, str], None]
 LogFn = Callable[[str], None]
@@ -86,12 +88,10 @@ class BatchDeps(Protocol):
     ) -> TranscribeOutcome: ...
 
 
-def midi_file(out_dir: str | Path, stem: str) -> Path:
-    return Path(out_dir) / f"{stem}_vocals.mid"
-
-
-def csv_file(out_dir: str | Path, stem: str) -> Path:
-    return Path(out_dir) / f"{stem}_vocals_notes.csv"
+# 产物命名只有一处定义（`core.names`）；这里保留旧的公开名字，
+# 因为测试与既有调用点从 `core.batch` 取它们。
+midi_file = names.midi_file
+csv_file = names.csv_file
 
 
 def make_batch_dir(root: str | Path, now: datetime | None = None) -> Path:
@@ -134,10 +134,6 @@ class BatchResult:
     def failed_count(self) -> int:
         return len(self.failed)
 
-    @property
-    def pending_count(self) -> int:
-        return self.attempted - self.ok_count - self.failed_count
-
     def summary_text(self) -> str:
         if self.cancelled:
             return f"已取消 · 成功 {self.ok_count} · 失败 {self.failed_count} · 未处理 {self.remaining}"
@@ -175,6 +171,7 @@ class BatchRunner:
         self._cancel = cancel_event or threading.Event()
         self._batch_dir: Path | None = None
         self._claimed: dict[str, set[str]] = {}
+        self._used_dirs: list[Path] = []
         self._last_emitted = 0.0
 
     # ---- 进度聚合 -------------------------------------------------------
@@ -231,10 +228,7 @@ class BatchRunner:
     @staticmethod
     def _stem_taken(out_dir: Path, stem: str) -> bool:
         """目录里已经有这个主名的产物，就换一个，别往上叠同名文件。"""
-        return (
-            separation.vocals_file(out_dir, stem).exists()
-            or midi_file(out_dir, stem).exists()
-        )
+        return names.vocals_file(out_dir, stem).exists() or midi_file(out_dir, stem).exists()
 
     # ---- 主流程 ---------------------------------------------------------
     def run(self, items: Sequence[QueueItem] | Iterable[QueueItem]) -> BatchResult:
@@ -276,10 +270,12 @@ class BatchRunner:
 
         if not result.cancelled:
             self._last_emitted = 1.0
-            self._on_progress(1.0, f"全部完成 · 共 {total} 首")
+            # 统一成「第 N/M 首 · …」的形状，界面才能拿它直接当同一行进度文案。
+            self._on_progress(1.0, f"第 {total}/{total} 首 · 全部完成")
 
-        if self._batch_dir is not None:
-            result.batch_dirs.append(self._batch_dir)
+        # 只收真正跑过的曲目用到的目录，按出现顺序去重；没轮到的曲目可能还带着
+        # 上一轮的目录，算进来会凭空多出一个链接。
+        result.batch_dirs.extend(self._used_dirs)
         result.elapsed_s = time.monotonic() - started
         self._on_log(result.summary_text())
         return result
@@ -290,6 +286,10 @@ class BatchRunner:
             raise FileNotFoundError(f"找不到音频文件：{item.path}")
 
         out_dir = self._dir_for(item)
+        # 汇总里要列出本批**实际写过**的目录：全重试的批次一个目录都不新建，
+        # 但产物确实落在旧目录里，漏了它会让汇总的批次目录链接消失。
+        if out_dir not in self._used_dirs:
+            self._used_dirs.append(out_dir)
         stem = self._stem_for(item, out_dir)
         item.mark_running()
         self._on_track(item)
@@ -302,7 +302,7 @@ class BatchRunner:
             vocals = audio
             self._emit(index, total, SEPARATE_END, f"分离中 · {item.display_name}")
         else:
-            target = separation.vocals_file(out_dir, stem)
+            target = names.vocals_file(out_dir, stem)
             if not self.options.overwrite and separation.is_reusable_vocals(target):
                 self._on_log(f"已复用人声轨：{target.name}")
                 vocals = target
@@ -329,12 +329,16 @@ class BatchRunner:
             stem,
             self.options,
             lambda frac, text: self._emit(
-                index, total, SEPARATE_END + (1.0 - SEPARATE_END) * max(0.0, min(1.0, frac)), text
+                index, total, SEPARATE_END + STAGE_WEIGHTS["transcribe"] * max(0.0, min(1.0, frac)), text
             ),
             self._cancel,
         )
         if self._cancel.is_set():
             raise Cancelled("已取消")
+
+        # 写盘是第三阶段，但真正写文件这件事包含在 `transcribe` 依赖里。所以这里
+        # 只补一帧，让「写盘」这一段在进度上真的存在，且三段加起来恰好到 1.0。
+        self._emit(index, total, TRANSCRIBE_END, f"写盘中 · {item.display_name}")
 
         item.mark_done(
             vocals_path="" if self.options.vocals_only else vocals,
@@ -415,9 +419,6 @@ def downgrade_missing_products(items: Iterable[QueueItem]) -> list[QueueItem]:
     for item in items:
         if item.track_status is TrackStatus.DONE and not item.products_exist():
             item.mark_pending()
-            item.vocals_path = ""
-            item.midi_path = ""
-            item.csv_path = ""
             downgraded.append(item)
     return downgraded
 

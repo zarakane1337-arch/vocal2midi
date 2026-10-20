@@ -20,7 +20,7 @@ import sys
 from html import escape
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QDragEnterEvent, QDropEvent, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -48,7 +48,7 @@ from .. import APP_TITLE, __version__, paths
 from ..core import environment, params as param_registry, separation, settings as settings_mod
 from ..core.batch import BatchOptions, BatchResult, downgrade_missing_products
 from ..core.pipeline import AUDIO_EXTS
-from ..core.queue import Queue, QueueItem, TrackStatus
+from ..core.queue import Queue, QueueItem
 from ..core.transcription import TranscriptionParams
 from .batch_worker import BatchWorker
 from .deps_dialog import DependencyDialog
@@ -72,7 +72,6 @@ class MainWindow(QMainWindow):
         self.params_rows: dict[str, ParamRow] = {}
         self.choice_rows: dict[str, ChoiceRow] = {}
         self._last_result: BatchResult | None = None
-        self._running = False
 
         self.theme = ThemeManager(QApplication.instance(), self)
         self.theme.apply(self.settings.theme)
@@ -192,6 +191,7 @@ class MainWindow(QMainWindow):
         self.queue_panel.rejected.connect(self._on_paths_rejected)
         self.queue_panel.openProducts.connect(self._open_products)
         self.queue_panel.openBatchDir.connect(lambda item: self._open_dir(Path(item.batch_dir)))
+        self.queue_panel.errorRequested.connect(self._show_track_error)
         card.body.addWidget(self.queue_panel)
 
         self.drop_hint = QLabel("把音频文件拖到窗口任意位置也可以", objectName="Faint")
@@ -613,7 +613,9 @@ class MainWindow(QMainWindow):
     def _update_convert_enabled(self) -> None:
         pending = len(self.queue.pending_items())
         running = bool(self.worker and self.worker.isRunning())
-        self.convert_button.setEnabled(bool(pending) and not running)
+        # 队列非空就允许点：全部完成的情况下由点击弹窗告诉用户为什么没开始，
+        # 比一个没有任何反馈的禁用按钮更容易理解。
+        self.convert_button.setEnabled(self.queue.total > 0 and not running)
         if running:
             return
         if not self.queue.total:
@@ -749,8 +751,15 @@ class MainWindow(QMainWindow):
         if self._verify_products():
             self._update_convert_enabled()
 
+    def _show_track_error(self, item: QueueItem) -> None:
+        """「查看失败原因」：直接把原因读出来，而不是去开一个不存在的产物。"""
+        QMessageBox.information(
+            self,
+            item.display_name,
+            item.error or "这首曲目没有记录失败原因。",
+        )
+
     def _set_running(self, running: bool) -> None:
-        self._running = running
         self.cancel_button.setEnabled(running)
         self.queue_panel.set_locked(running)
         for widget in (
@@ -782,19 +791,19 @@ class MainWindow(QMainWindow):
         self.queue_panel.refresh()
         self._save_queue()
 
-        summary = f"成功 {result.ok_count}"
-        if result.failed_count:
-            summary += f" · 失败 {result.failed_count}"
+        # 规格要求汇总同时给出成功数与失败数，所以失败数为 0 也写出来。
+        summary = f"成功 {result.ok_count} · 失败 {result.failed_count}"
         self.status_label.setText(f"批次结束 · {summary} · 用时 {result.elapsed_s:.1f}s")
         self._append_log(f"批次结束：{summary}，用时 {result.elapsed_s:.1f}s")
 
         lines = [f"<b>{summary}</b>"]
         if result.failed:
-            lines.append(
-                "失败曲目："
-                + "、".join(escape(failure.item.display_name) for failure in result.failed)
-            )
+            # 规格要求汇总里就给出「失败曲目名与各自的原因」，不能只让用户去
+            # 折叠的日志里找：每一首占一行，名字和原因都按用户输入转义。
             for failure in result.failed:
+                lines.append(
+                    f"{escape(failure.item.display_name)}：{escape(failure.reason)}"
+                )
                 self._append_log(f"  失败：{failure.item.display_name} — {failure.reason}")
         links = [
             f'<a href="{Path(batch_dir).as_uri()}">批次目录</a>'
@@ -822,13 +831,11 @@ class MainWindow(QMainWindow):
         if result is None:
             self.status_label.setText("已取消")
             return
-        self.status_label.setText(f"已取消 · {result.summary_text()}")
+        # `summary_text()` 本身就以「已取消 · …」开头，这里再拼一次会得到
+        # 「已取消 · 已取消 · …」。两种展示都只拿它当唯一来源。
+        self.status_label.setText(result.summary_text())
         self._append_log(f"批次结束：{result.summary_text()}")
-        done = result.ok_count
-        failed = result.failed_count
-        self.result_label.setText(
-            f"<b>已取消</b><br>成功 {done} · 失败 {failed} · 未处理 {result.remaining}"
-        )
+        self.result_label.setText(f"<b>{escape(result.summary_text())}</b>")
 
     def _on_worker_finished(self) -> None:
         self._set_running(False)
@@ -890,14 +897,11 @@ class MainWindow(QMainWindow):
             event.acceptProposedAction()
 
     def dropEvent(self, event: QDropEvent) -> None:  # noqa: N802
-        paths = [
-            url.toLocalFile()
-            for url in event.mimeData().urls()
-            if url.toLocalFile() and Path(url.toLocalFile()).suffix.lower() in AUDIO_EXTS
-        ]
-        if not paths:
+        dropped = [url.toLocalFile() for url in event.mimeData().urls() if url.toLocalFile()]
+        if not dropped:
             event.ignore()
             return
-        self.queue_panel.add_paths(paths)
-        self._remember(paths[-1])
+        # 这里不预先按扩展名过滤：`check_importable` 会逐条给出拒绝原因，
+        # 再由 `rejected` 信号弹窗告诉用户。自己静默过滤等于把提示吞掉。
+        self.queue_panel.add_paths(dropped)
         event.acceptProposedAction()

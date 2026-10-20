@@ -16,6 +16,7 @@ from vocal2midi.core.queue import (
     check_importable,
     normalise_status,
 )
+from vocal2midi.core.settings import Settings
 
 
 # ---- 入队校验 ----------------------------------------------------------
@@ -233,3 +234,41 @@ def test_from_dicts_tolerates_garbage():
     assert Queue.from_dicts("nope").total == 0
     assert Queue.from_dicts([{"no_path": 1}, 42, {"path": "  "}]).total == 0
     assert Queue.from_dicts([{"path": "a.mp3", "status": "weird"}]).items[0].track_status is TrackStatus.PENDING
+
+
+def test_a_running_item_restored_from_disk_goes_back_to_pending():
+    """落盘的 running 只可能是「进程在批次中途被杀」：它没有人在推进。
+
+    留着它会让这首曲目永远显示「转换中」且再也不会被处理，所以重启后
+    必须退回待转换；批次目录与主名要保留，重试才能回到同一个地方。
+    """
+    restored = Queue.from_dicts(
+        [
+            {
+                "path": "C:/music/a.mp3",
+                "status": "running",
+                "batch_dir": "C:/out/20260101-000000",
+                "stem": "a",
+            }
+        ]
+    )
+
+    (item,) = restored.items
+    assert item.track_status is TrackStatus.PENDING
+    assert item.batch_dir == "C:/out/20260101-000000"
+    assert item.stem == "a"
+    assert restored.pending_items() == [item]
+
+
+# ---- 设置文件 ----------------------------------------------------------
+
+
+def test_a_corrupted_settings_file_degrades_to_an_empty_queue(tmp_path):
+    """文件被截断或写坏时，不能把启动也一起弄挂。"""
+    broken = tmp_path / "settings.json"
+    broken.write_text('{"queue": [{"path": "a.mp3"', encoding="utf-8")
+
+    settings = Settings.load(broken)
+
+    assert settings.queue == []
+    assert Queue.from_dicts(settings.queue).total == 0

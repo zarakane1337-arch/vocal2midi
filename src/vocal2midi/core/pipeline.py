@@ -1,10 +1,9 @@
-"""两阶段流水线：分离 → 转写 → 落盘。
+"""单首曲目的流水线：分离 → 转写 → 落盘。
 
-界面层只调用 `run_pipeline()`，把「进度 / 日志 / 取消」通过回调注入，
-这样界面逻辑与业务逻辑彻底解耦。
-
-批量转换要复用同一个已加载的分离器，并且自己决定产物的目录与主名，
-所以这两件事都可以由调用方注入；不注入时行为与单文件转换完全一致。
+界面层不再直接调这里，而是走 `core.batch.run_batch()`：批量转换自己决定产物
+的目录与主名，并需要整批复用一个已加载的分离器。`Pipeline` 现在是批次的依赖
+对象（`batch.PipelineDeps` 复用它的分离/转写能力）与测试用的单首入口，保留了
+「目录 / 主名 / 会话」可注入的能力，方便单曲调试。
 """
 
 from __future__ import annotations
@@ -18,6 +17,7 @@ from typing import Any, Callable, Mapping
 from . import params as param_registry
 from . import separation, transcription
 from .cancellation import Cancelled
+from .names import csv_file, midi_file
 
 log = logging.getLogger("vocal2midi.pipeline")
 
@@ -180,8 +180,8 @@ class Pipeline:
         else:
             stem = opts.stem or opts.audio_path.stem
             midi_base = Path(vocals_path).parent
-        midi_path = midi_base / f"{stem}_vocals.mid"
-        csv_path = midi_base / f"{stem}_vocals_notes.csv"
+        midi_path = midi_file(midi_base, stem)
+        csv_path = csv_file(midi_base, stem)
 
         self._enter("transcribe", "开始人声转 MIDI")
         self._emit(0.1, "分析音高与音符")

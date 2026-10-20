@@ -311,6 +311,29 @@ def test_progress_text_mentions_track_index_and_stage(audio_files, options):
     assert any(text.startswith("第 2/2 首") for text in texts)
     assert any("分离" in text for text in texts)
     assert any("转写" in text for text in texts)
+    assert any("写盘" in text for text in texts)
+    # 结束帧也要用同一个形状，否则界面那一行文案会突然换格式。
+    assert texts[-1] == "第 2/2 首 · 全部完成", texts[-1]
+
+
+def test_stage_boundaries_come_from_the_documented_weights(audio_files, options):
+    """分离 / 转写 / 写盘三段占比必须是 0.62 / 0.32 / 0.06。"""
+    from vocal2midi.core.pipeline import STAGE_WEIGHTS
+
+    (item,) = audio_files("a.mp3")
+    frames: list[tuple[float, str]] = []
+
+    run_batch([item], options, deps=FakeDeps(), on_progress=lambda f, t: frames.append((f, t)))
+
+    texts = [text for _f, text in frames]
+    values = [value for value, _text in frames]
+    separate = STAGE_WEIGHTS["separate"]
+    write_starts = texts.index("第 1/1 首 · 写盘中 · a.mp3")
+
+    # 分离阶段在 0.62 处结束，转写在 0.62 + 0.32 = 0.94 处交给写盘，最后正好 1.0。
+    assert values[texts.index("第 1/1 首 · 转写中 · a.mp3")] == pytest.approx(separate)
+    assert values[write_starts] == pytest.approx(separate + STAGE_WEIGHTS["transcribe"])
+    assert values[-1] == pytest.approx(1.0)
 
 
 def test_progress_is_weighted_by_track_count(audio_files, options):
@@ -325,16 +348,21 @@ def test_progress_is_weighted_by_track_count(audio_files, options):
 
 
 def test_second_run_does_not_start_progress_from_a_stale_high_water_mark(audio_files, options):
-    items = audio_files("a.mp3")
-    runner = BatchRunner(options, deps=FakeDeps())
-    runner.run(items)
+    first_seen: list[float] = []
+    BatchRunner(options, deps=FakeDeps(), on_progress=lambda f, _t: first_seen.append(f)).run(
+        audio_files("a.mp3")
+    )
 
-    fresh = audio_files("b.mp3")
+    assert first_seen[-1] == pytest.approx(1.0), first_seen
+
+    fresh = audio_files("b.mp3", "c.mp3")
     seen: list[float] = []
     BatchRunner(options, deps=FakeDeps(), on_progress=lambda f, _t: seen.append(f)).run(fresh)
 
-    # 每首自己的进度从 0 起算，第一帧不该直接是 1.0
-    assert seen[0] < 1.0
+    # 新执行器自己的进度从 0 起算：第一帧应当落在「第一首的开头」，
+    # 而不是接着上一轮结尾的 1.0。
+    assert seen[0] <= 1 / len(fresh) + 1e-6, seen
+    assert seen[-1] == pytest.approx(1.0)
 
 
 # ---- 批次目录 ----------------------------------------------------------
@@ -384,6 +412,28 @@ def test_batch_dir_is_reused_for_an_item_that_already_has_one(audio_files, optio
 
     assert Path(item.batch_dir) == existing
     assert Path(item.midi_path).parent == existing
+
+
+def test_an_all_retry_batch_still_reports_the_directory_it_wrote_into(audio_files, options):
+    """全重试的批次一个目录都不新建，但汇总里必须有它真正写过的那个目录。"""
+    (item,) = audio_files("retry.mp3")
+    existing = make_batch_dir(options.out_dir)
+    item.batch_dir = str(existing)
+    item.stem = "retry"
+
+    result = run_batch([item], options, deps=FakeDeps())
+
+    assert result.batch_dirs == [existing]
+
+
+def test_batch_dirs_are_listed_once_each_in_order(audio_files, options):
+    items = audio_files("a.mp3", "b.mp3", "c.mp3")
+
+    result = run_batch(items, options, deps=FakeDeps())
+
+    # 同一个批次目录里跳到三首，但它只能出现一次。
+    assert len(result.batch_dirs) == 1
+    assert result.batch_dirs[0] == Path(items[0].batch_dir)
 
 
 def test_stem_is_pinned_on_the_item_and_survives_a_retry(audio_files, options):
@@ -584,19 +634,23 @@ def test_track_events_are_reported_for_every_item(audio_files, options):
 def test_pipeline_deps_reuses_one_separator_session_across_tracks(monkeypatch, audio_files, tmp_path):
     """整批只加载一次模型：这是 ADR 0002 的核心约束。"""
     loads: list[tuple[str, str]] = []
+    sessions: list[object] = []
 
     class FakeSession:
         samplerate = 8000
 
+    shared = FakeSession()
+
     class FakeCache:
         def get(self, model, device, on_progress=None):
             loads.append((model, device))
-            return FakeSession()
+            return shared
 
     separated: list[str] = []
 
     def fake_separate_vocals(audio_path, out_dir, **kwargs):
         separated.append(Path(audio_path).name)
+        sessions.append(kwargs.get("session"))
         target = Path(out_dir) / f"{kwargs['stem']}_vocals.wav"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"x" * 2048)
@@ -611,9 +665,11 @@ def test_pipeline_deps_reuses_one_separator_session_across_tracks(monkeypatch, a
     run_batch(items, BatchOptions(out_dir=tmp_path / "out"), deps=deps)
 
     assert separated == ["a.mp3", "b.mp3", "c.mp3"]
-    # 缓存命中三次（每次请求都问一次），但模型只该被真正加载一次——
-    # 这里由 FakeCache 每次返回同一实例来体现「不重建」。
+    # 每首曲目都问一次缓存（三次请求），但拿到的必须是**同一个**分离器实例：
+    # 若每首重建一个新的，模型会被反复加载，ADR 0002 就破了。
     assert len(loads) == 3
+    assert len(sessions) == 3
+    assert all(session is shared for session in sessions)
 
 
 def test_downgrade_missing_products(tmp_path):

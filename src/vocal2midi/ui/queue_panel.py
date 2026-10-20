@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent
@@ -75,10 +74,12 @@ class QueuePanel(QWidget):
     rejected = Signal(list)  # [(路径, 原因)]
     openProducts = Signal(object)  # QueueItem
     openBatchDir = Signal(object)  # QueueItem
+    errorRequested = Signal(object)  # QueueItem，要看失败原因
 
     def __init__(self, queue: Queue, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.queue = queue
+        self._locked = False
         self._build()
 
     # ---- 构建 -----------------------------------------------------------
@@ -169,7 +170,7 @@ class QueuePanel(QWidget):
 
     def _refresh_buttons(self) -> None:
         has_selection = bool(self.list.selectedItems())
-        running = getattr(self, "_locked", False)
+        running = self._locked
         row = self._selected_row()
         self.remove_button.setEnabled(has_selection and not running)
         self.clear_button.setEnabled(self.queue.total > 0 and not running)
@@ -194,8 +195,6 @@ class QueuePanel(QWidget):
     def set_locked(self, locked: bool) -> None:
         """跑批期间：允许删改队列吗？不允许删，但允许继续拖入。"""
         self._locked = locked
-        self.remove_button.setEnabled(bool(self.list.selectedItems()) and not locked)
-        self.clear_button.setEnabled(self.queue.total > 0 and not locked)
         self._refresh_buttons()
 
     def _selected_row(self) -> int | None:
@@ -284,14 +283,7 @@ class QueuePanel(QWidget):
         if item.track_status is TrackStatus.FAILED and item.error:
             menu.addSeparator()
             act_reason = QAction("查看失败原因", self)
-            act_reason.triggered.connect(lambda: self.openProducts.emit(item))
+            act_reason.triggered.connect(lambda: self.errorRequested.emit(item))
             menu.addAction(act_reason)
         if menu.actions():
             menu.exec(self.list.viewport().mapToGlobal(position))
-
-    def selected_items(self) -> list[QueueItem]:
-        return [
-            item
-            for item in (self._item_at(self.list.row(entry)) for entry in self.list.selectedItems())
-            if item is not None
-        ]

@@ -111,17 +111,16 @@ class QueueItem:
         self.status = TrackStatus.FAILED.value
         self.error = str(reason)
 
-    def mark_pending(self, drop_products: bool = True) -> None:
+    def mark_pending(self) -> None:
         """退回待转换。
 
-        `drop_products=False` 用于「状态是被校验降级的」这种情况：产物路径
-        已经确认失效，但批次目录要留着，重试还得回那里。
+        产物路径一并清空：它们要么没写出来，要么已经失效。批次目录与产物主名
+        不在这里动，重试还得回到同一个地方。
         """
         self.status = TrackStatus.PENDING.value
-        if drop_products:
-            self.vocals_path = ""
-            self.midi_path = ""
-            self.csv_path = ""
+        self.vocals_path = ""
+        self.midi_path = ""
+        self.csv_path = ""
 
     # ---- JSON 互转 ------------------------------------------------------
     _TEXT_FIELDS = ("path", "status", "stem", "batch_dir", "vocals_path", "midi_path", "csv_path", "error")
@@ -214,12 +213,6 @@ class Queue:
             return True
         return False
 
-    def index_of(self, item: QueueItem) -> int:
-        try:
-            return self.items.index(item)
-        except ValueError:
-            return -1
-
     # ---- 查询 -----------------------------------------------------------
     @property
     def total(self) -> int:
@@ -246,6 +239,12 @@ class Queue:
             return queue
         for entry in payload:
             item = QueueItem.from_dict(entry)
-            if item is not None:
-                queue.items.append(item)
+            if item is None:
+                continue
+            if item.track_status is TrackStatus.RUNNING:
+                # 落盘的 running 只可能来自「进程在批次中途被杀」：那份状态没有
+                # 任何人在推进，产物也没记下来，留着它会让这首曲目永远显示
+                # 「转换中」且再也不会被处理。退回待转换即可，批次目录与主名保留。
+                item.mark_pending()
+            queue.items.append(item)
         return queue
