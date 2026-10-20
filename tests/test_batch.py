@@ -221,6 +221,71 @@ def test_cancelling_between_stages_skips_transcription(audio_files, options):
     assert items[0].track_status is TrackStatus.PENDING
 
 
+def test_cancel_during_transcription_also_returns_to_pending(audio_files, options):
+    """转写阶段取消：和分离阶段取消一个待遇，不算失败。"""
+    items = audio_files("a.mp3", "b.mp3")
+
+    class CancelDuringTranscribe(FakeDeps):
+        def transcribe(self, vocals_path, out_dir, stem, options, on_progress, cancel_event):
+            super().transcribe(vocals_path, out_dir, stem, options, on_progress, cancel_event)
+            cancel_event.set()
+            raise Cancelled("已取消")
+
+    deps = CancelDuringTranscribe()
+    result = run_batch(items, options, deps=deps)
+
+    assert result.cancelled is True
+    assert result.failed_count == 0
+    assert items[0].track_status is TrackStatus.PENDING
+    assert items[1].track_status is TrackStatus.PENDING
+    assert ("separate", "b.mp3") not in deps.calls
+
+
+def test_cancelled_track_drops_its_products_but_keeps_its_batch_dir(audio_files, options):
+    """被打断的那首既不能留着半套产物，也不能把批次目录丢了。"""
+    items = audio_files("a.mp3", "b.mp3")
+
+    run_batch(items, options, deps=FakeDeps(cancel_on="b.mp3"))
+
+    interrupted = items[1]
+    assert (interrupted.vocals_path, interrupted.midi_path, interrupted.csv_path) == ("", "", "")
+    assert interrupted.batch_dir
+    assert interrupted.error == ""
+
+
+def test_cancelled_summary_is_told_apart_from_a_failure(audio_files, options):
+    """取消与失败是两件事：汇总里必须能看出是哪一种。"""
+    cancelled = run_batch(audio_files("a.mp3", "b.mp3"), options, deps=FakeDeps(cancel_on="b.mp3"))
+    failed = run_batch(audio_files("c.mp3", "d.mp3"), options, deps=FakeDeps(fail_on={"d.mp3"}))
+
+    assert "已取消" in cancelled.summary_text()
+    assert cancelled.failed_count == 0
+    assert cancelled.remaining == 1
+    assert "已取消" not in failed.summary_text()
+    assert failed.failed_count == 1
+
+
+def test_a_cancelled_batch_can_be_resumed(audio_files, options):
+    """取消之后队列里剩下的是「待转换」，再点一次开始就该把它们跑完。"""
+    queue = Queue()
+    queue.items.extend(audio_files("a.mp3", "b.mp3", "c.mp3"))
+
+    run_batch(queue.pending_items(), options, deps=FakeDeps(cancel_on="b.mp3"))
+    assert [item.track_status for item in queue.items] == [
+        TrackStatus.DONE,
+        TrackStatus.PENDING,
+        TrackStatus.PENDING,
+    ]
+
+    resumed = FakeDeps()
+    result = run_batch(queue.pending_items(), options, deps=resumed)
+
+    assert result.cancelled is False
+    assert result.ok_count == 2
+    assert [item.track_status for item in queue.items] == [TrackStatus.DONE] * 3
+    assert [name for stage, name in resumed.calls if stage == "separate"] == ["b.mp3", "c.mp3"]
+
+
 # ---- 进度 --------------------------------------------------------------
 
 

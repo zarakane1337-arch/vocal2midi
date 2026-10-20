@@ -818,12 +818,17 @@ class MainWindow(QMainWindow):
         self.queue_panel.refresh()
         self._save_queue()
         self._append_log("用户取消了批次")
-        if result is not None and not result.cancelled:
+        # 取消不是错误：不弹窗，只把「已取消」与前后的成败数写清楚。
+        if result is None:
             self.status_label.setText("已取消")
             return
-        remaining = result.remaining if result is not None else 0
-        ok_count = result.ok_count if result is not None else 0
-        self.status_label.setText(f"已取消 · 成功 {ok_count} · 未处理 {remaining}")
+        self.status_label.setText(f"已取消 · {result.summary_text()}")
+        self._append_log(f"批次结束：{result.summary_text()}")
+        done = result.ok_count
+        failed = result.failed_count
+        self.result_label.setText(
+            f"<b>已取消</b><br>成功 {done} · 失败 {failed} · 未处理 {result.remaining}"
+        )
 
     def _on_worker_finished(self) -> None:
         self._set_running(False)
