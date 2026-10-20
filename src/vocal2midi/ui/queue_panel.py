@@ -75,6 +75,7 @@ class QueuePanel(QWidget):
     openProducts = Signal(object)  # QueueItem
     openBatchDir = Signal(object)  # QueueItem
     errorRequested = Signal(object)  # QueueItem，要看失败原因
+    openBatchDirRequested = Signal(str)  # 要整体取件的批次目录，空串 = 无
 
     def __init__(self, queue: Queue, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -117,6 +118,14 @@ class QueuePanel(QWidget):
         self.down_button = QPushButton("下移")
         self.down_button.clicked.connect(self.move_selected_down)
         row.addWidget(self.down_button)
+
+        # 整体取件：一次处理一整批产物，而不用逐首点开。具体开哪个目录
+        # 由主窗口决定（它知道上一次批次写了哪里），这里只负责发出请求。
+        self.batch_dir_button = QPushButton("打开批次目录")
+        self.batch_dir_button.clicked.connect(
+            lambda: self.openBatchDirRequested.emit(self._batch_dir_target())
+        )
+        row.addWidget(self.batch_dir_button)
 
         row.addStretch(1)
 
@@ -181,6 +190,7 @@ class QueuePanel(QWidget):
         self.down_button.setEnabled(
             not running and row is not None and row < self.queue.total - 1
         )
+        self.batch_dir_button.setEnabled(self._batch_dir_target() is not None)
 
         counts = self.queue.counts()
         if not self.queue.total:
@@ -192,6 +202,16 @@ class QueuePanel(QWidget):
                 parts.append(f"{status.label} {counts[status.value]}")
         self.count_label.setText(" · ".join(parts))
 
+    def _batch_dir_target(self) -> str:
+        """会拿哪个批次目录去打开：先看选中那首，再看整个队列。"""
+        item = self.selected_item()
+        if item is not None and item.batch_dir:
+            return item.batch_dir
+        for candidate in reversed(self.queue.items):
+            if candidate.batch_dir:
+                return candidate.batch_dir
+        return ""
+
     def set_locked(self, locked: bool) -> None:
         """跑批期间：允许删改队列吗？不允许删，但允许继续拖入。"""
         self._locked = locked
@@ -202,6 +222,11 @@ class QueuePanel(QWidget):
         if len(entries) != 1:
             return None
         return self.list.row(entries[0])
+
+    def selected_item(self) -> QueueItem | None:
+        """当前选中的那一首（多选或无选中时为 None）。"""
+        row = self._selected_row()
+        return None if row is None else self._item_at(row)
 
     def move_selected_up(self) -> None:
         row = self._selected_row()

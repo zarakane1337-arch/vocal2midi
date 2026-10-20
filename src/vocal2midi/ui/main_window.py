@@ -192,6 +192,7 @@ class MainWindow(QMainWindow):
         self.queue_panel.openProducts.connect(self._open_products)
         self.queue_panel.openBatchDir.connect(lambda item: self._open_dir(Path(item.batch_dir)))
         self.queue_panel.errorRequested.connect(self._show_track_error)
+        self.queue_panel.openBatchDirRequested.connect(self._open_batch_dir)
         card.body.addWidget(self.queue_panel)
 
         self.drop_hint = QLabel("把音频文件拖到窗口任意位置也可以", objectName="Faint")
@@ -758,6 +759,13 @@ class MainWindow(QMainWindow):
             item.display_name,
             item.error or "这首曲目没有记录失败原因。",
         )
+
+    def _open_batch_dir(self, batch_dir: str) -> None:
+        """「打开批次目录」：一次处理整批产物。"""
+        if batch_dir:
+            self._open_dir(Path(batch_dir))
+            return
+        self._open_output_dir()
 
     def _set_running(self, running: bool) -> None:
         self.cancel_button.setEnabled(running)
