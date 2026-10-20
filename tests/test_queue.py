@@ -204,6 +204,31 @@ def test_queue_does_not_truncate_like_recent_files(audio_file):
     assert queue.total == 12
 
 
+def test_reordering_survives_a_save_and_reload(audio_file):
+    """新顺序要跟着队列一起存下来，重启后不能又弹回旧顺序。"""
+    queue = Queue()
+    queue.add_paths([audio_file("1.mp3"), audio_file("2.mp3"), audio_file("3.mp3")])
+
+    queue.move_down(0)
+    restored = Queue.from_dicts(json.loads(json.dumps(queue.to_dicts())))
+
+    assert [item.display_name for item in restored.items] == ["2.mp3", "1.mp3", "3.mp3"]
+
+
+def test_moving_never_loses_or_duplicates_an_item(audio_file):
+    """把能合法的每一步都走一遍，条目集合不能变。"""
+    queue = Queue()
+    queue.add_paths([audio_file("1.mp3"), audio_file("2.mp3"), audio_file("3.mp3")])
+    before = sorted(item.path for item in queue.items)
+
+    for index in range(queue.total):
+        queue.move_up(index)
+        queue.move_down(index)
+
+    assert sorted(item.path for item in queue.items) == before
+    assert queue.total == 3
+
+
 def test_from_dicts_tolerates_garbage():
     assert Queue.from_dicts("nope").total == 0
     assert Queue.from_dicts([{"no_path": 1}, 42, {"path": "  "}]).total == 0

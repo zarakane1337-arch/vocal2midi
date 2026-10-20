@@ -407,6 +407,66 @@ def test_make_batch_dir_avoids_collisions(tmp_path):
     assert first.is_dir() and second.is_dir()
 
 
+# ---- 同批重名 ----------------------------------------------------------
+
+
+def test_two_tracks_with_the_same_name_do_not_overwrite_each_other(tmp_path, options):
+    """同一个歌名来自两张专辑是常态，产物不能互相盖掉。"""
+    first = tmp_path / "cd1" / "song.mp3"
+    second = tmp_path / "cd2" / "song.mp3"
+    for path in (first, second):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"audio")
+    items = [QueueItem(path=str(first)), QueueItem(path=str(second))]
+
+    result = run_batch(items, options, deps=FakeDeps())
+
+    assert result.ok_count == 2
+    assert items[0].stem != items[1].stem
+    assert items[0].stem == "song"
+    assert items[1].stem == "song-2"
+    products = [
+        Path(getattr(item, key))
+        for item in items
+        for key in ("vocals_path", "midi_path", "csv_path")
+    ]
+    assert len(products) == 6
+    assert len({str(path) for path in products}) == 6
+    assert all(path.is_file() for path in products)
+
+
+def test_the_second_same_name_keeps_its_own_stem_on_retry(tmp_path, options):
+    """重跑第二首时它还该用自己的 song-2，而不是被别人占着的 song。"""
+    first = tmp_path / "cd1" / "song.mp3"
+    second = tmp_path / "cd2" / "song.mp3"
+    for path in (first, second):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"audio")
+    items = [QueueItem(path=str(first)), QueueItem(path=str(second))]
+    run_batch(items, options, deps=FakeDeps())
+    stem, batch_dir = items[1].stem, items[1].batch_dir
+    items[1].mark_pending()
+
+    run_batch([items[1]], options, deps=FakeDeps())
+
+    assert items[1].stem == stem
+    assert items[1].batch_dir == batch_dir
+    assert Path(items[1].midi_path).name == f"{stem}_vocals.mid"
+
+
+def test_a_stem_already_on_disk_is_not_reused(tmp_path, options):
+    """目录里已经有了别人留下的同名产物，就换下一个序号。"""
+    (item,) = [QueueItem(path=str(tmp_path / "song.mp3"))]
+    (tmp_path / "song.mp3").write_bytes(b"audio")
+    batch_dir = make_batch_dir(options.out_dir)
+    item.batch_dir = str(batch_dir)
+    (batch_dir / "song_vocals.wav").write_bytes(b"y" * 2048)
+
+    run_batch([item], options, deps=FakeDeps())
+
+    assert item.stem == "song-2"
+
+
 # ---- 复用人声轨 --------------------------------------------------------
 
 

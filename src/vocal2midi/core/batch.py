@@ -174,6 +174,7 @@ class BatchRunner:
         self._on_track = on_track or (lambda _item: None)
         self._cancel = cancel_event or threading.Event()
         self._batch_dir: Path | None = None
+        self._claimed: dict[str, set[str]] = {}
         self._last_emitted = 0.0
 
     # ---- 进度聚合 -------------------------------------------------------
@@ -206,10 +207,34 @@ class BatchRunner:
         item.batch_dir = str(target)
         return target
 
-    def _stem_for(self, item: QueueItem) -> str:
-        if not item.stem:
-            item.stem = Path(item.path).stem
-        return item.stem
+    def _stem_for(self, item: QueueItem, out_dir: Path) -> str:
+        """产物主名：首次进批时确定并钉在曲目上，同批重名追加序号。
+
+        重试的曲目已经有主名，直接用——否则它会换到一个新主名上，上次的
+        产物就成了没人认领的孤儿。
+        """
+        claimed = self._claimed.setdefault(str(out_dir), set())
+        if item.stem:
+            claimed.add(item.stem)
+            return item.stem
+
+        base = Path(item.path).stem or "track"
+        stem = base
+        index = 2
+        while stem in claimed or self._stem_taken(out_dir, stem):
+            stem = f"{base}-{index}"
+            index += 1
+        claimed.add(stem)
+        item.stem = stem
+        return stem
+
+    @staticmethod
+    def _stem_taken(out_dir: Path, stem: str) -> bool:
+        """目录里已经有这个主名的产物，就换一个，别往上叠同名文件。"""
+        return (
+            separation.vocals_file(out_dir, stem).exists()
+            or midi_file(out_dir, stem).exists()
+        )
 
     # ---- 主流程 ---------------------------------------------------------
     def run(self, items: Sequence[QueueItem] | Iterable[QueueItem]) -> BatchResult:
@@ -265,7 +290,7 @@ class BatchRunner:
             raise FileNotFoundError(f"找不到音频文件：{item.path}")
 
         out_dir = self._dir_for(item)
-        stem = self._stem_for(item)
+        stem = self._stem_for(item, out_dir)
         item.mark_running()
         self._on_track(item)
         self._on_log(f"开始：{item.display_name}")

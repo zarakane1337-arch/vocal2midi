@@ -23,7 +23,6 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.queue import Queue, QueueItem, TrackStatus
-from .widgets import Card
 
 log = logging.getLogger("vocal2midi.queue_panel")
 
@@ -110,6 +109,14 @@ class QueuePanel(QWidget):
         self.clear_button.clicked.connect(self.clear_queue)
         row.addWidget(self.clear_button)
 
+        self.up_button = QPushButton("上移")
+        self.up_button.clicked.connect(self.move_selected_up)
+        row.addWidget(self.up_button)
+
+        self.down_button = QPushButton("下移")
+        self.down_button.clicked.connect(self.move_selected_down)
+        row.addWidget(self.down_button)
+
         row.addStretch(1)
 
         self.count_label = QLabel("队列为空")
@@ -163,9 +170,16 @@ class QueuePanel(QWidget):
     def _refresh_buttons(self) -> None:
         has_selection = bool(self.list.selectedItems())
         running = getattr(self, "_locked", False)
+        row = self._selected_row()
         self.remove_button.setEnabled(has_selection and not running)
         self.clear_button.setEnabled(self.queue.total > 0 and not running)
-        self.add_button.setEnabled(not running)
+        # 跑批期间特意允许继续加歌：批次开始时已经取过快照，新加的歌
+        # 只会等下一批，不会插进正在跑的那批里。
+        self.add_button.setEnabled(True)
+        self.up_button.setEnabled(not running and row is not None and row > 0)
+        self.down_button.setEnabled(
+            not running and row is not None and row < self.queue.total - 1
+        )
 
         counts = self.queue.counts()
         if not self.queue.total:
@@ -183,6 +197,30 @@ class QueuePanel(QWidget):
         self.remove_button.setEnabled(bool(self.list.selectedItems()) and not locked)
         self.clear_button.setEnabled(self.queue.total > 0 and not locked)
         self._refresh_buttons()
+
+    def _selected_row(self) -> int | None:
+        entries = self.list.selectedItems()
+        if len(entries) != 1:
+            return None
+        return self.list.row(entries[0])
+
+    def move_selected_up(self) -> None:
+        row = self._selected_row()
+        if row is None or row <= 0:
+            return
+        self.queue.move_up(row)
+        self.refresh(keep_row=row - 1)
+        self.list.setCurrentRow(row - 1)
+        self.changed.emit()
+
+    def move_selected_down(self) -> None:
+        row = self._selected_row()
+        if row is None or row >= self.queue.total - 1:
+            return
+        self.queue.move_down(row)
+        self.refresh(keep_row=row + 1)
+        self.list.setCurrentRow(row + 1)
+        self.changed.emit()
 
     # ---- 增删 -----------------------------------------------------------
     def add_paths(self, paths: list[str]) -> None:
@@ -257,15 +295,3 @@ class QueuePanel(QWidget):
             for item in (self._item_at(self.list.row(entry)) for entry in self.list.selectedItems())
             if item is not None
         ]
-
-
-class QueueCard(Card):
-    """把队列面板包进一张卡片，与其它卡片视觉一致。"""
-
-    def __init__(self, progress_hint: str, parent: QWidget | None = None) -> None:
-        super().__init__("歌曲队列", progress_hint, parent)
-        self.panel: QueuePanel | None = None
-
-    def mount(self, panel: QueuePanel) -> None:
-        self.panel = panel
-        self.body.addWidget(panel)
