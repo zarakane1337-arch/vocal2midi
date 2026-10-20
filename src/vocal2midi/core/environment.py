@@ -66,7 +66,10 @@ def inspect() -> EnvironmentReport:
         missing=installer.missing_modules(),
         ffmpeg=paths.ffmpeg_exe(),
     )
-    report.deps_ready = not report.missing and paths.deps_marker().exists()
+    # 安装态以安装器写的 runtime/.deps-ok 标记为准；源码运行时没有这个标记，
+    # 只要模块都能找到就应当视为可用，否则每次启动都会误报「缺少依赖」。
+    marker_ok = paths.deps_marker().exists() or not paths.is_frozen()
+    report.deps_ready = not report.missing and marker_ok
 
     state = installer.torch_state()
     report.torch_version = state.get("version") if isinstance(state.get("version"), str) else None

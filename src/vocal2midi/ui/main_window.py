@@ -547,7 +547,6 @@ class MainWindow(QMainWindow):
         if weights.weights_ready():
             QMessageBox.information(self, "模型权重", f"权重已就绪：\n{weights.checkpoints_dir()}")
             return
-        from .deps_dialog import DependencyDialog as _  # noqa: F401 - 保持导入一致
         confirm = QMessageBox.question(
             self,
             "下载模型权重",

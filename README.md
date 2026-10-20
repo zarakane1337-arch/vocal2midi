@@ -33,11 +33,12 @@ Python 包清单见 `requirements.txt`。
 
 ```
 vocal2midi/
-├── src/vocal2midi/          # 应用包（v2.0.0 起）
+├── src/vocal2midi/          # 应用包（v2.0.0 起的目录结构）
 │   ├── __main__.py          # 由 vocal2midi.exe 调起的入口
 │   ├── app.py               # 启动编排：环境准备 → Qt 界面
 │   ├── paths.py             # 所有路径决策集中在这里（安装态/开发态都适用）
-│   ├── core/
+│   ├── assets/              # 程序图标（ico + 三种尺寸 png）
+│   ├── core/                # 业务层，不 import PySide6，可单独测试
 │   │   ├── params.py        # 参数注册表：11 个可调参数 + 自定义文本解析
 │   │   ├── separation.py    # 分离层：Demucs 混音 → 人声 wav
 │   │   ├── transcription.py # 转写层：人声 wav → 音符 → MIDI / CSV（SwiftF0）
@@ -46,14 +47,34 @@ vocal2midi/
 │   │   ├── mirrors.py       # 国内镜像测速与排序
 │   │   ├── installer.py     # 依赖安装引擎（setup.exe 也调用它）
 │   │   ├── weights.py       # demucs 权重按需下载
-│   │   └── environment.py   # 环境自检报告
-│   └── ui/
+│   │   ├── environment.py   # 环境自检报告
+│   │   └── settings.py      # 用户配置读写
+│   └── ui/                  # 界面层，只调用 core.pipeline
 │       ├── main_window.py   # 主窗口
+│       ├── deps_dialog.py   # 依赖安装进度对话框
 │       ├── theme.py         # 深/浅/跟随系统主题引擎
-│       └── widgets.py       # 卡片、参数行（滑动条 + 输入框联动）
+│       ├── widgets.py       # 卡片、参数行（滑动条 + 输入框联动）
+│       └── worker.py        # 把流水线放到 QThread 上跑的包装
+├── docs/
+│   ├── pipeline.svg         # 管线原理图（本文开头引用）
+│   ├── swiftf0-vs-basic-pitch.md      # 转写引擎选型实测报告
+│   ├── swiftf0_vs_basicpitch_*.png    # 报告里的两张图
+│   └── release-notes/       # 各版本 GitHub Release 正文草稿
+├── installer/               # 安装包构建：C# 启动器、Inno Setup 脚本、构建脚本
+├── tools/                   # make_icon.py：生成程序图标
 ├── requirements.txt
-└── out/                     # 运行时生成：人声轨、MIDI、CSV
+└── out/                     # 运行时产物：人声轨、MIDI、CSV
 ```
+
+以下目录**不纳入版本库**（已写进 `.gitignore`）：
+
+| 目录 | 内容 |
+|---|---|
+| `.venv/` | 开发机虚拟环境，约 5.7 GB |
+| `.cache/` | 构建时下载的 python embed zip 等临时文件 |
+| `build/` | `installer/build_installer.ps1` 的输出：payload 与 setup.exe |
+| `models/` | htdemucs_ft 权重（401 MB），开发机上也不需要放在仓库里 |
+| `out/` | 跑出来的产物，随时可删 |
 
 ### 分层约定
 
@@ -72,8 +93,9 @@ vocal2midi/
 
 ## 安装
 
-下载 `vocal2midi-2.0.0-setup.exe` 双击安装即可。**安装包只有 10.8 MB**，因为它
-不再打包 torch / demucs / PySide6 这些库，只装程序本体：
+从 [Releases](https://github.com/zarakane1337-arch/vocal2midi/releases/latest) 下载最新版的
+`vocal2midi-<版本>-setup.exe` 双击安装即可（文件名里的版本号就是安装包内程序的版本号）。
+**安装包只有 10.8 MB**，因为它不再打包 torch / demucs / PySide6 这些库，只装程序本体：
 
 | 内容 | 体积 |
 |---|---|
@@ -153,9 +175,12 @@ bend_range 4
 
 | 文件 | 说明 |
 |---|---|
-| `stems/<歌名>_vocals.wav` | Demucs 分离出的人声轨（自动缓存，重复运行不重算） |
+| `<歌名>_vocals.wav` | Demucs 分离出的人声轨（自动缓存，重复运行不重算） |
 | `<歌名>_vocals.mid` | 最终人声 MIDI，含 pitch bend，可直接拖入 DAW |
 | `<歌名>_vocals_notes.csv` | 音符事件明细（起始 / 结束 / 时长 / 音高 / 幅度 / 弯音），可用 Excel 打开核对 |
+
+三者平铺在同一目录，不分子文件夹。同名 wav 已存在时会被复用，
+换参数要重算时在界面上勾选覆盖，或先删掉对应的 wav。
 
 ## 参数参考
 
@@ -204,7 +229,36 @@ bend_range 4
 
 ## 更新日志
 
-见 [`CHANGELOG.md`](CHANGELOG.md)。当前版本 **v2.0.0**：架构重构为 `src/vocal2midi/` 包、安装包 420 MB → 10.8 MB、深浅/跟随系统主题、转写参数滑动条 + 输入框双向调节、自定义参数。
+见 [`CHANGELOG.md`](CHANGELOG.md)。
+
+版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)，标签写作 `V主.次.补丁`（大写 V）：
+
+| 位 | 什么时候加 | 判断标准 |
+|---|---|---|
+| 主版本 | 不兼容变更 | 用户必须做点什么才能继续用：安装方式/目录结构变了、参数语义变了、输出格式变了、入口被移除 |
+| 次版本 | 向后兼容的新增 | 不改变已有用法就能升级：新参数、新功能、换引擎但接口与事件格式不变、质量与性能提升 |
+| 补丁号 | 仅修复 | 同一输入得到的结果符合原有预期，只是修好了不该出问题的地方 |
+
+口诀：**不需要任何用户动作就能升级 → 至少次版本；需要改操作、重装或改参数值 → 主版本；
+同一输入的结果变了（哪怕更好）→ 至少次版本，不算补丁。**
+
+版本号的唯一真源是 `src/vocal2midi/__init__.py` 里的 `__version__`。
+`installer/build_installer.ps1` 从那里读取，并传给安装包（`/DAppVersion`）
+和启动器（自动生成的汇编特性文件），三处不会各写各的。
+
+### 发版检查表
+
+1. 改 `src/vocal2midi/__init__.py` 的 `__version__`，按上表判断加哪一位。
+2. 在 `CHANGELOG.md` 顶部把「未发布」改成 `## [x.y.z] - YYYY-MM-DD`，
+   并在文件末尾的链接块补一行 `[x.y.z]: …/releases/tag/Vx.y.z`，
+   同时把 `[未发布]` 的 compare 起点改成新标签。
+3. 跑 `installer\build_installer.ps1` 出安装包。构建脚本会自己核对版本资源，
+   版本号对不上会直接失败，不会产出一个版本号是假的 exe。
+4. 打标签并推送：`git tag Vx.y.z && git push origin Vx.y.z`（大写 V，与已有标签一致）。
+5. 在 GitHub 上以该标签建 Release，正文贴 CHANGELOG 里对应的一节，
+   上传 `vocal2midi-x.y.z-setup.exe`，并附上 `Get-FileHash` 算出的 SHA256。
+6. 校验安装包版本：右键属性 →「详细信息」，文件版本与产品版本都应是 x.y.z；
+   命令行可跑 `vocal2midi.exe --version`（输出 `vocal2midi x.y.z`）。
 
 ## 许可证
 

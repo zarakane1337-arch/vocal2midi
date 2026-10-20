@@ -224,3 +224,11 @@ pip install -r requirements.txt
 [2.0.0]: https://github.com/zarakane1337-arch/vocal2midi/releases/tag/V2.0.0
 [1.0.0]: https://github.com/zarakane1337-arch/vocal2midi/releases/tag/V1.0.0
 [0.1.0]: https://github.com/zarakane1337-arch/vocal2midi/releases/tag/V0.2.0
+
+<!--
+0.1.0 是首个版本，仓库里没有为它单独打过标签：最初那次发布用的是 V0.2.0
+（提交 8c35b8f「更新了UI界面，增加高级选项卡」），CHANGELOG 里 0.1.0 这一节
+描述的内容就包含在那次发布里。所以上面的链接指向 V0.2.0 是有意为之，
+不是笔误 —— 请不要改成 V0.1.0，那个标签从未存在过。
+-->
+

@@ -1,6 +1,6 @@
 # SwiftF0 vs basic-pitch：已分离人声轨上的实测对比
 
-测试对象：`out/stems/Ayase - 幽霊東京_vocals.wav`（Demucs 分离，44.1 kHz 立体声，210.7 s）。
+测试对象：`out/Ayase - 幽霊東京_vocals.wav`（Demucs 分离，44.1 kHz 立体声，210.7 s）。
 参照基准：librosa pYIN（独立第三方，不当作绝对真值）+ 谐波显著性裁判（完全不依赖参照）。
 统一口径：16 kHz / HOP=256（16 ms）/ 13167 帧 / f0 ∈ [70, 900] Hz。
 

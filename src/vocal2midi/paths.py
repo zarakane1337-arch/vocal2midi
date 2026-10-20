@@ -116,11 +116,6 @@ def site_packages() -> Path:
     return target / marker / "site-packages"
 
 
-def models_dir() -> Path:
-    """随程序附带的模型目录（当前版本不含权重，仅保留扩展位）。"""
-    return app_root() / "models"
-
-
 def torch_home() -> Path:
     raw = os.environ.get("TORCH_HOME", "").strip()
     if raw:
