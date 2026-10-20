@@ -1,0 +1,5 @@
+-r requirements.txt
+
+# 只有开发/测试需要，不进用户侧运行时清单（requirements.txt 是安装器
+# 下载依赖的依据，多一个包就是用户多等一次下载）。
+pytest>=8

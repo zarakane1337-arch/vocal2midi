@@ -2,6 +2,9 @@
 
 界面层只调用 `run_pipeline()`，把「进度 / 日志 / 取消」通过回调注入，
 这样界面逻辑与业务逻辑彻底解耦。
+
+批量转换要复用同一个已加载的分离器，并且自己决定产物的目录与主名，
+所以这两件事都可以由调用方注入；不注入时行为与单文件转换完全一致。
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ from typing import Any, Callable, Mapping
 
 from . import params as param_registry
 from . import separation, transcription
+from .cancellation import Cancelled
 
 log = logging.getLogger("vocal2midi.pipeline")
 
@@ -23,8 +27,18 @@ AUDIO_EXTS = (".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".wma", 
 STAGE_WEIGHTS = {"separate": 0.62, "transcribe": 0.32, "write": 0.06}
 
 
-class Cancelled(RuntimeError):
-    """用户主动取消。"""
+# 取消语义只有一个定义（`core.cancellation`），这里重新导出，
+# 让既有的 `from .pipeline import Cancelled` 继续可用。
+__all__ = [
+    "AUDIO_EXTS",
+    "STAGE_WEIGHTS",
+    "Cancelled",
+    "PipelineOptions",
+    "PipelineResult",
+    "Pipeline",
+    "run_pipeline",
+    "default_params",
+]
 
 
 @dataclass
@@ -37,6 +51,9 @@ class PipelineOptions:
     overwrite: bool = False
     params: transcription.TranscriptionParams = field(default_factory=transcription.TranscriptionParams)
     write_csv: bool = True
+    # 产物主名与已加载的分离器都可以由调用方指定；留空时沿用「用输入文件名现算」。
+    stem: str | None = None
+    session: separation.SeparatorSession | None = None
 
     def __post_init__(self) -> None:
         # 允许直接传 dict（界面层用映射更顺手），统一在这里转换成参数对象，
@@ -52,6 +69,7 @@ class PipelineOptions:
         param_values = raw.pop("params", None) or {}
         if not isinstance(param_values, Mapping):
             param_values = {}
+        stem = raw.get("stem")
         return cls(
             audio_path=Path(raw.get("audio_path", "")),
             out_dir=Path(raw.get("out_dir", ".")),
@@ -61,6 +79,8 @@ class PipelineOptions:
             overwrite=bool(raw.get("overwrite", False)),
             params=transcription.TranscriptionParams.from_mapping(param_values),
             write_csv=bool(raw.get("write_csv", True)),
+            stem=str(stem) if stem else None,
+            session=raw.get("session"),
         )
 
 
@@ -144,6 +164,9 @@ class Pipeline:
                 device=opts.device,
                 overwrite=opts.overwrite,
                 on_progress=lambda frac, text: self._emit(frac, text),
+                stem=opts.stem,
+                session=opts.session,
+                cancel_event=self._cancel,
             )
             if self.cancelled:
                 raise Cancelled("已取消")
@@ -152,10 +175,10 @@ class Pipeline:
             raise Cancelled("已取消")
 
         if opts.vocals_only:
-            stem = opts.audio_path.stem.replace("_vocals", "")
+            stem = opts.stem or opts.audio_path.stem.replace("_vocals", "")
             midi_base = opts.out_dir
         else:
-            stem = opts.audio_path.stem
+            stem = opts.stem or opts.audio_path.stem
             midi_base = Path(vocals_path).parent
         midi_path = midi_base / f"{stem}_vocals.mid"
         csv_path = midi_base / f"{stem}_vocals_notes.csv"

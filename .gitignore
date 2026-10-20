@@ -27,6 +27,9 @@ out/
 # pip 在仓库根目录残留的临时目录（安装中断时留下，形如 pip-install-xxxx）
 pip-*/
 
+# pytest 在受限环境里建不出来的临时目录残留（见 tests/conftest.py 的说明）
+pytest-cache-files-*/
+
 # DSH 编辑器写入时的临时文件
 .dsh-ops-update-*.lock
 
