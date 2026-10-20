@@ -87,6 +87,7 @@ class MainWindow(QMainWindow):
         self._apply_report()
         self._update_convert_enabled()
         QTimer.singleShot(0, self._check_environment_on_start)
+        QTimer.singleShot(0, self._verify_products_on_start)
 
     # ==================================================================
     # 界面构建
@@ -691,12 +692,8 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # 批次开始前扫一遍：状态是完成但产物已不在的，退回待转换。
-        downgraded = downgrade_missing_products(self.queue.items)
-        if downgraded:
-            self.queue_panel.refresh()
-            self._save_queue()
-            self._append_log(f"{len(downgraded)} 首曲目的产物已不在，已退回待转换")
+        # 批次开始前扫一遍：用户可能在程序开着的时候清空了输出目录。
+        self._verify_products()
 
         items = self.queue.pending_items()
         if not items:
@@ -733,6 +730,24 @@ class MainWindow(QMainWindow):
     def _on_track_changed(self, item: QueueItem) -> None:
         self.queue_panel.refresh()
         self._save_queue()
+
+    def _verify_products(self) -> int:
+        """状态是完成、产物却已不在的曲目，退回待转换。
+
+        查看产物要碰磁盘，所以只在启动时和批次开始前各扫一次，不在每次刷新
+        队列时做。
+        """
+        downgraded = downgrade_missing_products(self.queue.items)
+        if not downgraded:
+            return 0
+        self.queue_panel.refresh()
+        self._save_queue()
+        self._append_log(f"{len(downgraded)} 首曲目的产物已不在，已退回待转换")
+        return len(downgraded)
+
+    def _verify_products_on_start(self) -> None:
+        if self._verify_products():
+            self._update_convert_enabled()
 
     def _set_running(self, running: bool) -> None:
         self._running = running

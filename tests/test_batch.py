@@ -32,10 +32,16 @@ from vocal2midi.core.transcription import TranscriptionParams
 class FakeDeps:
     """记下每首曲目各调了哪个阶段，并按需制造失败或取消。"""
 
-    def __init__(self, fail_on: set[str] | None = None, cancel_on: str | None = None) -> None:
+    def __init__(
+        self,
+        fail_on: set[str] | None = None,
+        cancel_on: str | None = None,
+        fail_transcribe_on: set[str] | None = None,
+    ) -> None:
         self.calls: list[tuple[str, str]] = []  # (阶段, 曲目名)
         self.fail_on = fail_on or set()
         self.cancel_on = cancel_on
+        self.fail_transcribe_on = fail_transcribe_on or set()
 
     @staticmethod
     def _name(audio_path: Path) -> str:
@@ -58,6 +64,8 @@ class FakeDeps:
     def transcribe(self, vocals_path, out_dir, stem, options, on_progress, cancel_event) -> TranscribeOutcome:
         name = Path(vocals_path).name.replace("_vocals.wav", ".mp3")
         self.calls.append(("transcribe", name))
+        if name in self.fail_transcribe_on:
+            raise RuntimeError(f"{name} 转写失败")
         on_progress(0.5, "转写中")
         midi = midi_file(out_dir, stem)
         midi.write_bytes(b"mid")
@@ -520,3 +528,105 @@ def _audio(tmp_path, name: str) -> Path:
     path = tmp_path / name
     path.write_bytes(b"audio")
     return path
+
+
+# ---- 重试：只跑失败那首，且不重算分离 --------------------------------
+
+
+def test_retry_after_a_transcribe_failure_only_transcribes(audio_files, options):
+    """转写阶段失败的曲目，重试时人声轨已经在了，不该再分离一遍。"""
+    (item,) = audio_files("song.mp3")
+    first = FakeDeps(fail_transcribe_on={"song.mp3"})
+
+    result = run_batch([item], options, deps=first)
+    assert result.failed_count == 1
+    assert item.track_status is TrackStatus.FAILED
+    assert ("separate", "song.mp3") in first.calls
+    batch_dir, stem = item.batch_dir, item.stem
+
+    retry = FakeDeps()
+    result = run_batch([item], options, deps=retry)
+
+    assert result.ok_count == 1
+    assert item.track_status is TrackStatus.DONE
+    assert retry.calls == [("transcribe", "song.mp3")]
+    assert item.batch_dir == batch_dir
+    assert item.stem == stem
+    assert Path(item.midi_path).parent == Path(batch_dir)
+    assert Path(item.midi_path).name == f"{stem}_vocals.mid"
+
+
+def test_retry_after_deleted_vocals_separates_again_into_the_same_dir(audio_files, options):
+    """人声轨被删了就得重算，但产物仍回原来那份目录与那个主名。"""
+    (item,) = audio_files("song.mp3")
+    run_batch([item], options, deps=FakeDeps(fail_transcribe_on={"song.mp3"}))
+    batch_dir, stem = item.batch_dir, item.stem
+    vocals = Path(batch_dir) / f"{stem}_vocals.wav"
+    assert vocals.is_file()
+    vocals.unlink()
+
+    retry = FakeDeps()
+    result = run_batch([item], options, deps=retry)
+
+    assert result.ok_count == 1
+    assert [stage for stage, _name in retry.calls] == ["separate", "transcribe"]
+    assert item.batch_dir == batch_dir
+    assert item.stem == stem
+    assert Path(item.vocals_path) == vocals
+
+
+def test_retry_only_touches_the_failed_track(audio_files, options):
+    """三首里中间那首失败：重试只该再跑它一首。"""
+    items = audio_files("a.mp3", "b.mp3", "c.mp3")
+    run_batch(items, options, deps=FakeDeps(fail_transcribe_on={"b.mp3"}))
+    assert [item.track_status for item in items] == [
+        TrackStatus.DONE,
+        TrackStatus.FAILED,
+        TrackStatus.DONE,
+    ]
+
+    queue = Queue(items=list(items))
+    retry = FakeDeps()
+    result = run_batch(queue.pending_items(), options, deps=retry)
+
+    assert result.attempted == 1
+    assert result.ok_count == 1
+    assert retry.calls == [("transcribe", "b.mp3")]
+
+
+def test_a_finished_track_whose_products_are_gone_falls_back_to_pending(audio_files, options):
+    """完成但产物被删：降级后两个阶段都重跑，且仍回原目录。"""
+    (item,) = audio_files("song.mp3")
+    run_batch([item], options, deps=FakeDeps())
+    batch_dir, stem = item.batch_dir, item.stem
+    for key in ("vocals_path", "midi_path", "csv_path"):
+        Path(getattr(item, key)).unlink(missing_ok=True)
+
+    downgraded = batch_mod.downgrade_missing_products([item])
+
+    assert downgraded == [item]
+    assert item.track_status is TrackStatus.PENDING
+    assert (item.vocals_path, item.midi_path, item.csv_path) == ("", "", "")
+
+    retry = FakeDeps()
+    run_batch([item], options, deps=retry)
+    assert [stage for stage, _name in retry.calls] == ["separate", "transcribe"]
+    assert item.batch_dir == batch_dir
+    assert item.stem == stem
+
+
+def test_overwrite_wins_over_the_retry_reuse(audio_files, tmp_path):
+    """勾了「强制重新分离」，重试时也不能被人声轨复用判定吃掉。"""
+    (item,) = audio_files("song.mp3")
+    run_batch(
+        [item],
+        BatchOptions(out_dir=tmp_path / "out"),
+        deps=FakeDeps(fail_transcribe_on={"song.mp3"}),
+    )
+    vocals = Path(item.batch_dir) / f"{item.stem}_vocals.wav"
+    assert vocals.is_file()
+
+    retry = FakeDeps()
+    run_batch([item], BatchOptions(out_dir=tmp_path / "out", overwrite=True), deps=retry)
+
+    assert ("separate", "song.mp3") in retry.calls
