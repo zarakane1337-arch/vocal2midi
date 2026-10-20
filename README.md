@@ -45,7 +45,8 @@ vocal2midi/
 │   │   ├── pipeline.py      # 单首曲目的两阶段流水线：进度 / 日志 / 取消
 │   │   ├── queue.py         # 队列：曲目、状态、增删排序、入队校验
 │   │   ├── batch.py         # 批次执行器：按队列顺序跑完一批，逐首上报
-│   │   ├── cancellation.py  # 取消信号（分离层与流水线共用）
+│   │   ├── names.py         # 产物命名：wav / mid / csv 三处共用一套规则
+│   │   ├── cancellation.py  # 取消信号（分离层、流水线、批次共用）
 │   │   ├── net.py           # 多连接断点续传下载器
 │   │   ├── mirrors.py       # 国内镜像测速与排序
 │   │   ├── installer.py     # 依赖安装引擎（setup.exe 也调用它）
@@ -59,26 +60,40 @@ vocal2midi/
 │       ├── deps_dialog.py   # 依赖安装进度对话框
 │       ├── theme.py         # 深/浅/跟随系统主题引擎
 │       └── widgets.py       # 卡片、参数行（滑动条 + 输入框联动）
+├── tests/                   # pytest：队列、批次执行器、分离层、流水线
+│   ├── conftest.py          # 自建临时目录（本机 0o700 目录不可访问，见文件注释）
+│   └── test_*.py
 ├── docs/
 │   ├── pipeline.svg         # 管线原理图（本文开头引用）
 │   ├── swiftf0-vs-basic-pitch.md      # 转写引擎选型实测报告
 │   ├── swiftf0_vs_basicpitch_*.png    # 报告里的两张图
+│   ├── adr/                 # 架构决策记录（为什么这样设计）
 │   └── release-notes/       # 各版本 GitHub Release 正文草稿
-├── installer/               # 安装包构建：C# 启动器、Inno Setup 脚本、构建脚本
-├── tools/                   # make_icon.py：生成程序图标
-├── requirements.txt
-└── out/                     # 运行时产物：每次批次一个 <时间戳> 子目录
+├── pytest.ini               # 测试配置（testpaths、pythonpath=src）
+├── requirements.txt         # 用户侧运行时清单，安装器据此下载依赖
+├── requirements-dev.txt     # 开发/测试额外依赖（pytest），不进运行时清单
+├── GLOSSARY.md              # 领域术语表：曲目、批次、队列、产物主名
+├── CHANGELOG.md
+└── LICENSE
 ```
+
+跑完的产物在 `.gitignore` 覆盖的 `out/<时间戳>/` 下，不在这里列。
 
 以下目录**不纳入版本库**（已写进 `.gitignore`）：
 
 | 目录 | 内容 |
 |---|---|
-| `.venv/` | 开发机虚拟环境，约 5.7 GB |
+| `.venv/` | 开发机虚拟环境，约 5.5 GB；测试命令写死了 `.venv/Scripts/python.exe`，不要挪 |
 | `.cache/` | 构建时下载的 python embed zip 等临时文件 |
 | `build/` | `installer/build_installer.ps1` 的输出：payload 与 setup.exe |
 | `models/` | htdemucs_ft 权重（401 MB），开发机上也不需要放在仓库里 |
 | `out/` | 跑出来的产物，随时可删 |
+| `installer/` | 安装包构建脚本与 C# 启动器，本仓库只收录源码 |
+| `tools/` | `make_icon.py`：生成程序图标 |
+| `.scratch/` | 本地 issue tracker（spec 与工单）与一次性脚本 |
+| `.dsh-progress/` | 长任务的进度面板数据 |
+| `.worktrees/` | 并行开发的 git worktree 挂载点 |
+| `AGENTS.md`、`docs/agents/` | 本机 agent 协作约定，每台机器各自生成 |
 
 ### 分层约定
 
@@ -90,6 +105,17 @@ vocal2midi/
   事件格式 `(start_s, end_s, pitch_midi, amplitude, [bend…])` 不变，界面一行都不用改。
 - 所有路径决策集中在 `paths.py`：同一份代码在「开发态的 src/ 布局」和
   「安装态的 runtime/ + app/ 布局」下都能找到正确位置。
+
+### 跑测试
+
+```powershell
+.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.venv\Scripts\python.exe -m pytest
+```
+
+全套测试不加载 torch / demucs、不碰 GPU，一秒内跑完；每条命令都能在
+「进度 / 日志 / 状态」上断言，不必真的跑一首歌。`pytest` 只进
+`requirements-dev.txt`，不污染用户侧的 `requirements.txt`。
 
 ## 环境要求
 
@@ -303,8 +329,9 @@ out/
 2. 在 `CHANGELOG.md` 顶部把「未发布」改成 `## [x.y.z] - YYYY-MM-DD`，
    并在文件末尾的链接块补一行 `[x.y.z]: …/releases/tag/Vx.y.z`，
    同时把 `[未发布]` 的 compare 起点改成新标签。
-3. 跑 `installer\build_installer.ps1` 出安装包。构建脚本会自己核对版本资源，
-   版本号对不上会直接失败，不会产出一个版本号是假的 exe。
+3. 跑一遍 `.venv\Scripts\python.exe -m pytest`，再跑 `installer\build_installer.ps1`
+   出安装包。构建脚本会自己核对版本资源，版本号对不上会直接失败，
+   不会产出一个版本号是假的 exe。
 4. 打标签并推送：`git tag Vx.y.z && git push origin Vx.y.z`（大写 V，与已有标签一致）。
 5. 在 GitHub 上以该标签建 Release，正文贴 CHANGELOG 里对应的一节，
    上传 `vocal2midi-x.y.z-setup.exe`，并附上 `Get-FileHash` 算出的 SHA256。
